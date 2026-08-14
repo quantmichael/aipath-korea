@@ -103,3 +103,84 @@ def get_opportunities() -> dict:
             status_code=500,
             detail="기회 정보를 불러오지 못했습니다.",
         ) from error
+
+
+@app.get("/api/opportunities/{slug}")
+def get_opportunity(slug: str) -> dict:
+    try:
+        supabase = create_supabase_client()
+
+        response = (
+            supabase.table("opportunities")
+            .select(
+                """
+                id,
+                title,
+                slug,
+                summary,
+                description,
+                organizer,
+                target_audience,
+                difficulty,
+                format,
+                region,
+                venue,
+                price_type,
+                price_text,
+                application_start_at,
+                application_deadline_at,
+                event_start_at,
+                event_end_at,
+                official_url,
+                image_url,
+                status,
+                last_verified_at,
+                categories (
+                    name,
+                    slug
+                ),
+                sources (
+                    name,
+                    homepage_url,
+                    attribution_text
+                ),
+                opportunity_tags (
+                    tags (
+                        name,
+                        slug
+                    )
+                )
+                """
+            )
+            .eq("slug", slug)
+            .neq("status", "draft")
+            .neq("status", "cancelled")
+            .limit(1)
+            .execute()
+        )
+
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        ) from error
+
+    except Exception as error:
+        print(f"Supabase detail query failed: {error}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="기회 상세 정보를 불러오지 못했습니다.",
+        ) from error
+
+    opportunities = response.data or []
+
+    if not opportunities:
+        raise HTTPException(
+            status_code=404,
+            detail="해당 기회를 찾을 수 없습니다.",
+        )
+
+    return {
+        "opportunity": opportunities[0],
+    }

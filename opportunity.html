@@ -1,14 +1,151 @@
 <!doctype html>
 <html lang="ko">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta
+      name="description"
+      content="AI 기회의 일정, 참가 대상, 참여 방식과 공식 출처를 확인하세요."
+    >
+
     <title>기회 상세 | AI PATH KOREA</title>
+
+    <link rel="stylesheet" href="./css/style.css">
   </head>
+
   <body>
-    <main>
-      <h1>기회 상세</h1>
-      <p>상세 화면은 다음 구현 단계에서 완성합니다.</p>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="logo" href="./index.html" aria-label="AI PATH KOREA 홈">
+          <span class="logo-mark">AI</span>
+          <span>PATH KOREA</span>
+        </a>
+
+        <nav class="main-navigation" aria-label="주요 메뉴">
+          <a class="active" href="./opportunities.html">기회 탐색</a>
+          <a href="./recommend.html">AI 추천</a>
+          <a href="./about.html">서비스 소개</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="detail-page">
+      <nav class="breadcrumb" aria-label="현재 위치">
+        <a href="./index.html">홈</a>
+        <span aria-hidden="true">/</span>
+        <a href="./opportunities.html">기회 탐색</a>
+        <span aria-hidden="true">/</span>
+        <span>상세 정보</span>
+      </nav>
+
+      <div id="detail-loading" class="result-message">
+        기회 상세 정보를 불러오는 중입니다.
+      </div>
+
+      <article id="opportunity-detail" class="detail-layout" hidden>
+        <div class="detail-main">
+          <header class="detail-header">
+            <div class="detail-badges">
+              <span id="detail-category" class="category-badge"></span>
+              <span id="detail-status" class="status-open"></span>
+            </div>
+
+            <h1 id="detail-title"></h1>
+            <p id="detail-summary" class="detail-summary"></p>
+
+            <div id="detail-tags" class="tag-list"></div>
+          </header>
+
+          <section class="detail-section">
+            <h2>기회 소개</h2>
+            <p id="detail-description"></p>
+          </section>
+
+          <section class="detail-section">
+            <h2>참가 대상</h2>
+            <p id="detail-audience"></p>
+          </section>
+
+          <section class="detail-section source-section">
+            <h2>출처 및 확인 정보</h2>
+
+            <dl class="source-information">
+              <div>
+                <dt>정보 출처</dt>
+                <dd id="detail-source"></dd>
+              </div>
+
+              <div>
+                <dt>마지막 확인</dt>
+                <dd id="detail-verified-at"></dd>
+              </div>
+            </dl>
+
+            <p class="source-notice">
+              일정과 참가 조건은 변경될 수 있습니다.
+              신청 전 반드시 공식 페이지에서 최신 정보를 확인하세요.
+            </p>
+          </section>
+        </div>
+
+        <aside class="detail-sidebar" aria-label="신청 정보">
+          <h2>신청 정보</h2>
+
+          <dl class="detail-facts">
+            <div>
+              <dt>주최기관</dt>
+              <dd id="detail-organizer"></dd>
+            </div>
+
+            <div>
+              <dt>모집 기간</dt>
+              <dd id="detail-application-period"></dd>
+            </div>
+
+            <div>
+              <dt>행사 기간</dt>
+              <dd id="detail-event-period"></dd>
+            </div>
+
+            <div>
+              <dt>참여 방식</dt>
+              <dd id="detail-format"></dd>
+            </div>
+
+            <div>
+              <dt>지역·장소</dt>
+              <dd id="detail-location"></dd>
+            </div>
+
+            <div>
+              <dt>참가비</dt>
+              <dd id="detail-price"></dd>
+            </div>
+
+            <div>
+              <dt>난이도</dt>
+              <dd id="detail-difficulty"></dd>
+            </div>
+          </dl>
+
+          <a
+            id="official-link"
+            class="button button-primary detail-cta"
+            href="#"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            공식 페이지에서 확인
+          </a>
+        </aside>
+      </article>
+
+      <div id="detail-error" class="result-message result-message-error" hidden>
+        기회 상세 정보를 불러오지 못했습니다.
+      </div>
     </main>
+
+    <script src="./js/opportunity.js?v=1"></script>
   </body>
 </html>

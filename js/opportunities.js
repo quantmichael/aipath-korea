@@ -8,6 +8,13 @@ const API_URL = isLocalEnvironment
 
 const opportunityList = document.querySelector("#opportunity-list");
 const resultCount = document.querySelector("#result-count");
+const searchInput = document.querySelector("#search-input");
+const categoryFilter = document.querySelector("#category-filter");
+const statusFilter = document.querySelector("#status-filter");
+const formatFilter = document.querySelector("#format-filter");
+const priceFilter = document.querySelector("#price-filter");
+
+let allOpportunities = [];
 
 const statusLabels = {
   scheduled: "모집 예정",
@@ -15,6 +22,12 @@ const statusLabels = {
   closed: "마감",
   ongoing: "진행 중",
   ended: "종료",
+};
+
+const formatLabels = {
+  online: "온라인",
+  offline: "오프라인",
+  hybrid: "온·오프라인",
 };
 
 function createElement(tagName, className, text) {
@@ -95,6 +108,10 @@ function createOpportunityCard(opportunity) {
       formatDate(opportunity.application_deadline_at),
     ),
     createMetaItem(
+      "참여 방식",
+      formatLabels[opportunity.format] || "공식 페이지 확인 필요",
+    ),
+    createMetaItem(
       "참가비",
       opportunity.price_text || "공식 페이지 확인 필요",
     ),
@@ -130,6 +147,88 @@ function createOpportunityCard(opportunity) {
   return article;
 }
 
+function normalizeText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getOpportunitySearchText(opportunity) {
+  const tagNames = (opportunity.opportunity_tags || [])
+    .map((relation) => relation.tags?.name || "")
+    .join(" ");
+
+  return normalizeText(
+    [
+      opportunity.title,
+      opportunity.summary,
+      opportunity.organizer,
+      opportunity.target_audience,
+      opportunity.categories?.name,
+      tagNames,
+    ].join(" "),
+  );
+}
+
+function renderOpportunities(opportunities) {
+  opportunityList.replaceChildren();
+  resultCount.textContent = opportunities.length;
+
+  if (opportunities.length === 0) {
+    opportunityList.append(
+      createElement(
+        "p",
+        "result-message",
+        "검색 조건에 맞는 기회가 없습니다.",
+      ),
+    );
+
+    return;
+  }
+
+  opportunities.forEach((opportunity) => {
+    opportunityList.append(createOpportunityCard(opportunity));
+  });
+}
+
+function applyFilters() {
+  const keyword = normalizeText(searchInput.value);
+  const category = categoryFilter.value;
+  const status = statusFilter.value;
+  const format = formatFilter.value;
+  const priceType = priceFilter.value;
+
+  const filteredOpportunities = allOpportunities.filter((opportunity) => {
+    const matchesKeyword =
+      !keyword ||
+      getOpportunitySearchText(opportunity).includes(keyword);
+
+    const matchesCategory =
+      !category ||
+      opportunity.categories?.slug === category;
+
+    const matchesStatus =
+      !status ||
+      opportunity.status === status;
+
+    const matchesFormat =
+      !format ||
+      opportunity.format === format;
+
+    const matchesPrice =
+      !priceType ||
+      opportunity.price_type === priceType;
+
+    return (
+      matchesKeyword &&
+      matchesCategory &&
+      matchesStatus &&
+      matchesFormat &&
+      matchesPrice
+    );
+  });
+
+  renderOpportunities(filteredOpportunities);
+}
+
 async function loadOpportunities() {
   try {
     const response = await fetch(API_URL);
@@ -139,26 +238,9 @@ async function loadOpportunities() {
     }
 
     const data = await response.json();
-    const opportunities = data.opportunities || [];
 
-    opportunityList.replaceChildren();
-    resultCount.textContent = opportunities.length;
-
-    if (opportunities.length === 0) {
-      opportunityList.append(
-        createElement(
-          "p",
-          "result-message",
-          "현재 조건에 맞는 기회가 없습니다.",
-        ),
-      );
-
-      return;
-    }
-
-    opportunities.forEach((opportunity) => {
-      opportunityList.append(createOpportunityCard(opportunity));
-    });
+    allOpportunities = data.opportunities || [];
+    renderOpportunities(allOpportunities);
   } catch (error) {
     console.error(error);
 
@@ -173,4 +255,16 @@ async function loadOpportunities() {
   }
 }
 
+searchInput.addEventListener("input", applyFilters);
+
+[
+  categoryFilter,
+  statusFilter,
+  formatFilter,
+  priceFilter,
+].forEach((filterElement) => {
+  filterElement.addEventListener("change", applyFilters);
+});
+
 loadOpportunities();
+

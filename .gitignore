@@ -1,0 +1,24 @@
+# 환경 변수와 비밀키
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node.js
+node_modules/
+
+# 편집기와 운영체제
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 빌드 및 배포 파일
+.vercel/
+dist/
+build/

@@ -1,0 +1,4 @@
+# Dependencies will be pinned after the first Python API is implemented and tested.
+openai
+supabase
+

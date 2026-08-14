@@ -1,14 +1,122 @@
 <!doctype html>
 <html lang="ko">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta
+      name="description"
+      content="국내 AI 교육, 공모전, 해커톤, 밋업과 콘퍼런스를 검색하고 조건별로 찾아보세요."
+    >
+
     <title>기회 탐색 | AI PATH KOREA</title>
+
+    <link rel="stylesheet" href="./css/style.css">
   </head>
+
   <body>
-    <main>
-      <h1>기회 탐색</h1>
-      <p>검색·필터 화면은 다음 구현 단계에서 완성합니다.</p>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="logo" href="./index.html" aria-label="AI PATH KOREA 홈">
+          <span class="logo-mark">AI</span>
+          <span>PATH KOREA</span>
+        </a>
+
+        <nav class="main-navigation" aria-label="주요 메뉴">
+          <a class="active" href="./opportunities.html">기회 탐색</a>
+          <a href="./recommend.html">AI 추천</a>
+          <a href="./about.html">서비스 소개</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="explore-page">
+      <section class="page-heading">
+        <p class="eyebrow">EXPLORE OPPORTUNITIES</p>
+        <h1>나에게 필요한 AI 기회를 찾아보세요.</h1>
+        <p>
+          교육부터 공모전, 해커톤, 밋업과 콘퍼런스까지
+          검증된 국내 AI 기회를 탐색할 수 있습니다.
+        </p>
+      </section>
+
+      <section class="filter-panel" aria-label="기회 검색 조건">
+        <div class="search-field">
+          <label for="search-input">검색</label>
+
+          <input
+            id="search-input"
+            type="search"
+            placeholder="제목, 기관 또는 관심 분야 검색"
+          >
+        </div>
+
+        <div class="filter-fields">
+          <div class="filter-field">
+            <label for="category-filter">카테고리</label>
+
+            <select id="category-filter">
+              <option value="">전체</option>
+              <option value="education">교육</option>
+              <option value="competition">공모전</option>
+              <option value="hackathon">해커톤</option>
+              <option value="meetup">밋업</option>
+              <option value="conference">콘퍼런스</option>
+              <option value="webinar">웨비나</option>
+              <option value="growth-program">성장 프로그램</option>
+            </select>
+          </div>
+
+          <div class="filter-field">
+            <label for="status-filter">진행 상태</label>
+
+            <select id="status-filter">
+              <option value="">전체</option>
+              <option value="open">모집 중</option>
+              <option value="scheduled">모집 예정</option>
+              <option value="ongoing">진행 중</option>
+              <option value="closed">마감</option>
+            </select>
+          </div>
+
+          <div class="filter-field">
+            <label for="format-filter">참여 방식</label>
+
+            <select id="format-filter">
+              <option value="">전체</option>
+              <option value="online">온라인</option>
+              <option value="offline">오프라인</option>
+              <option value="hybrid">온·오프라인</option>
+            </select>
+          </div>
+
+          <div class="filter-field">
+            <label for="price-filter">참가비</label>
+
+            <select id="price-filter">
+              <option value="">전체</option>
+              <option value="free">무료</option>
+              <option value="paid">유료</option>
+              <option value="mixed">일부 유료</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="opportunity-results" aria-live="polite">
+        <div class="results-header">
+          <div>
+            <p class="results-label">검색 결과</p>
+            <h2>현재 등록된 기회</h2>
+          </div>
+
+          <p><strong id="result-count">1</strong>개의 기회</p>
+        </div>
+        <div id="opportunity-list" class="opportunity-list">
+          <p class="result-message">기회 정보를 불러오는 중입니다.</p>
+        </div>
+      </section>
     </main>
+    <script src="./js/opportunities.js"></script>
   </body>
 </html>

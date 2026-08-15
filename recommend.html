@@ -1,14 +1,165 @@
 <!doctype html>
 <html lang="ko">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta
+      name="description"
+      content="관심 분야와 참여 조건을 입력하고 나에게 맞는 국내 AI 기회를 추천받으세요."
+    >
+
     <title>AI 맞춤 추천 | AI PATH KOREA</title>
+
+    <link rel="stylesheet" href="./css/style.css">
   </head>
+
   <body>
-    <main>
-      <h1>AI 맞춤 추천</h1>
-      <p>DB 기반 AI 추천 화면은 다음 구현 단계에서 완성합니다.</p>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="logo" href="./index.html" aria-label="AI PATH KOREA 홈">
+          <span class="logo-mark">AI</span>
+          <span>PATH KOREA</span>
+        </a>
+
+        <nav class="main-navigation" aria-label="주요 메뉴">
+          <a href="./opportunities.html">기회 탐색</a>
+          <a class="active" href="./recommend.html">AI 추천</a>
+          <a href="./about.html">서비스 소개</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="recommend-page">
+      <section class="page-heading">
+        <p class="eyebrow">AI MATCHING</p>
+        <h1>나에게 맞는 AI 기회를 추천받아 보세요.</h1>
+        <p>
+          관심 분야와 참여 조건을 입력하면 현재 DB에 등록된 기회 중
+          최대 3개를 선정해 추천 이유와 함께 안내합니다.
+        </p>
+      </section>
+
+      <div class="recommend-layout">
+        <form id="recommend-form" class="recommend-form">
+          <div class="form-heading">
+            <span>STEP 1</span>
+            <h2>나의 조건 입력</h2>
+            <p>정확한 추천을 위해 아래 항목을 선택해주세요.</p>
+          </div>
+
+          <fieldset>
+            <legend>현재 AI 학습 수준</legend>
+
+            <div class="choice-grid">
+              <label class="choice-card">
+                <input type="radio" name="level" value="beginner" required>
+                <span>
+                  <strong>입문</strong>
+                  <small>AI를 처음 배우는 단계</small>
+                </span>
+              </label>
+
+              <label class="choice-card">
+                <input type="radio" name="level" value="intermediate">
+                <span>
+                  <strong>중급</strong>
+                  <small>기초 학습이나 프로젝트 경험이 있음</small>
+                </span>
+              </label>
+
+              <label class="choice-card">
+                <input type="radio" name="level" value="advanced">
+                <span>
+                  <strong>고급</strong>
+                  <small>실무 또는 심화 프로젝트 경험이 있음</small>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div class="form-field">
+            <label for="interest">관심 분야</label>
+
+            <input
+              id="interest"
+              name="interest"
+              type="text"
+              placeholder="예: 생성형 AI, 데이터 분석, 컴퓨터 비전"
+              maxlength="100"
+              required
+            >
+          </div>
+
+          <div class="form-field">
+            <label for="goal">참여 목적</label>
+
+            <select id="goal" name="goal" required>
+              <option value="">선택해주세요</option>
+              <option value="learning">새로운 기술 학습</option>
+              <option value="portfolio">포트폴리오 제작</option>
+              <option value="competition">대회·공모전 도전</option>
+              <option value="networking">네트워킹</option>
+              <option value="career">취업·진로 탐색</option>
+            </select>
+          </div>
+
+          <div class="form-row">
+            <div class="form-field">
+              <label for="preferred-format">선호 참여 방식</label>
+
+              <select id="preferred-format" name="format">
+                <option value="">상관없음</option>
+                <option value="online">온라인</option>
+                <option value="offline">오프라인</option>
+                <option value="hybrid">온·오프라인</option>
+              </select>
+            </div>
+
+            <div class="form-field">
+              <label for="preferred-price">선호 참가비</label>
+
+              <select id="preferred-price" name="price">
+                <option value="">상관없음</option>
+                <option value="free">무료</option>
+                <option value="paid">유료 가능</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-field">
+            <label for="available-period">참여 가능한 기간</label>
+
+            <input
+              id="available-period"
+              name="available_period"
+              type="text"
+              placeholder="예: 8월 이후, 주말, 2026년 하반기"
+              maxlength="100"
+            >
+          </div>
+
+          <button class="button button-primary recommend-submit" type="submit">
+            AI 추천받기
+          </button>
+
+          <p class="form-notice">
+            AI는 현재 DB에 등록된 정보만 사용합니다.
+            일정과 참가 조건은 공식 페이지에서 최종 확인하세요.
+          </p>
+        </form>
+
+        <section id="recommend-result" class="recommend-result" aria-live="polite">
+          <div class="recommend-empty">
+            <span>AI</span>
+            <h2>조건을 입력하면 추천 결과가 여기에 표시됩니다.</h2>
+            <p>
+              추천 결과에는 실제 기회와 선정 이유가 함께 제공됩니다.
+            </p>
+          </div>
+        </section>
+      </div>
     </main>
+    <script src="./js/recommend.js?v=1"></script>
   </body>
 </html>

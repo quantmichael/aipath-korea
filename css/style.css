@@ -950,3 +950,261 @@ a {
     border-radius: 18px;
   }
 }
+
+.recommend-page {
+  width: min(calc(100% - 40px), var(--content-width));
+  margin: 0 auto;
+  padding: 72px 0 100px;
+}
+
+.recommend-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+  gap: 30px;
+  align-items: start;
+  margin-top: 48px;
+}
+
+.recommend-form,
+.recommend-result {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 24px;
+}
+
+.recommend-form {
+  padding: 32px;
+}
+
+.form-heading {
+  padding-bottom: 26px;
+  margin-bottom: 28px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.form-heading > span {
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.form-heading h2 {
+  margin: 6px 0 4px;
+  font-size: 25px;
+  letter-spacing: -0.04em;
+}
+
+.form-heading p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
+
+.recommend-form fieldset {
+  padding: 0;
+  margin: 0 0 26px;
+  border: 0;
+}
+
+.recommend-form legend,
+.form-field > label {
+  margin-bottom: 10px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.recommend-form legend {
+  width: 100%;
+}
+
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.choice-card {
+  position: relative;
+  cursor: pointer;
+}
+
+.choice-card input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.choice-card span {
+  display: grid;
+  gap: 3px;
+  min-height: 94px;
+  padding: 16px;
+  background: #fafafe;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.choice-card strong {
+  font-size: 15px;
+}
+
+.choice-card small {
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.choice-card input:checked + span {
+  color: var(--color-primary);
+  background: #f2f1ff;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgb(91 91 214 / 9%);
+}
+
+.choice-card input:focus-visible + span {
+  outline: 3px solid rgb(91 91 214 / 25%);
+  outline-offset: 2px;
+}
+
+.form-field {
+  display: grid;
+  margin-bottom: 22px;
+}
+
+.form-field input,
+.form-field select {
+  width: 100%;
+  height: 50px;
+  padding: 0 14px;
+  color: var(--color-text);
+  background: #fafafe;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  font: inherit;
+  outline: none;
+}
+
+.form-field input:focus,
+.form-field select:focus {
+  background: #fff;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgb(91 91 214 / 10%);
+}
+
+.form-field input::placeholder {
+  color: #9a9aa4;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.recommend-submit {
+  width: 100%;
+  margin-top: 4px;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.form-notice {
+  margin: 16px 0 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-align: center;
+  word-break: keep-all;
+}
+
+.recommend-result {
+  position: sticky;
+  top: 100px;
+  min-height: 480px;
+  padding: 30px;
+}
+
+.recommend-empty {
+  display: grid;
+  min-height: 418px;
+  text-align: center;
+  place-content: center;
+}
+
+.recommend-empty > span {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 18px;
+  color: #fff;
+  background: var(--color-primary);
+  border-radius: 17px;
+  font-weight: 900;
+  place-items: center;
+}
+
+.recommend-empty h2 {
+  max-width: 330px;
+  margin: 0 auto;
+  font-size: 21px;
+  line-height: 1.4;
+  letter-spacing: -0.03em;
+  word-break: keep-all;
+}
+
+.recommend-empty p {
+  max-width: 330px;
+  margin: 10px auto 0;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  word-break: keep-all;
+}
+
+@media (max-width: 900px) {
+  .recommend-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .recommend-result {
+    position: static;
+  }
+}
+
+@media (max-width: 640px) {
+  .recommend-page {
+    width: min(calc(100% - 32px), var(--content-width));
+    padding: 52px 0 72px;
+  }
+
+  .recommend-layout {
+    margin-top: 34px;
+  }
+
+  .recommend-form,
+  .recommend-result {
+    padding: 20px;
+    border-radius: 18px;
+  }
+
+  .choice-grid,
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .choice-card span {
+    min-height: auto;
+  }
+
+  .recommend-result {
+    min-height: 340px;
+  }
+
+  .recommend-empty {
+    min-height: 298px;
+  }
+}

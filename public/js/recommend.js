@@ -97,7 +97,7 @@ function renderRecommendations(data) {
     const rank = createElement(
       "span",
       "recommendation-rank",
-      `추천 ${index + 1}`,
+      `추천 ${index + 1}순위`,
     );
 
     const category = createElement(

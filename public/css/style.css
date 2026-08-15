@@ -1208,3 +1208,10 @@ a {
     min-height: 298px;
   }
 }
+
+.recommendation-card-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}

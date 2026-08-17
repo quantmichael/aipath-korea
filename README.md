@@ -10,6 +10,11 @@
 - Vercel: https://aipath-korea.vercel.app
 - Custom domain: https://aipath.kr
 
+## 저장소
+
+- GitHub: https://github.com/quantmichael/aipath-korea
+- Commit history: https://github.com/quantmichael/aipath-korea/commits/main
+
 ## 서비스 소개
 
 AI PATH KOREA는 AI를 학습하거나 업무와 진로에 접목하려는 사용자가 국내 AI 관련 성장 기회를 빠르게 찾도록 돕습니다.
@@ -31,6 +36,14 @@ AI PATH KOREA는 AI를 학습하거나 업무와 진로에 접목하려는 사�
 - Database: Supabase PostgreSQL
 - AI: OpenAI API
 - Deploy: GitHub, Vercel
+
+HTML은 페이지의 구조와 의미를 담당합니다. 홈, 기회 탐색, 상세 페이지, AI 추천 폼, 서비스 소개 화면의 제목, 버튼, 입력 필드, 결과 영역을 HTML로 구성했습니다.
+
+CSS는 화면의 스타일과 반응형 레이아웃을 담당합니다. 공통 헤더, 카드, 필터 패널, 추천 결과, 모바일 화면에서의 배치 변화와 간격 조정은 `public/css/style.css`에서 관리합니다.
+
+JavaScript는 사용자 동작과 데이터 흐름을 담당합니다. 검색/필터 입력을 처리하고, `fetch`로 `/api/opportunities`와 `/api/recommend`를 호출한 뒤 응답 데이터를 화면 카드와 안내 메시지로 렌더링합니다.
+
+프론트엔드는 정적 파일(`public/`)로 구성해 Vercel에서 빠르게 제공하고, 백엔드는 `api/` 폴더의 Python 함수로 분리했습니다. 이렇게 나누면 브라우저에 노출되면 안 되는 Supabase secret key와 OpenAI API key를 서버 환경 변수로만 다룰 수 있고, 화면 수정과 API 로직 수정을 독립적으로 배포/검증할 수 있습니다.
 
 ## 폴더 구조
 
@@ -63,6 +76,28 @@ SUPABASE_URL=
 SUPABASE_SECRET_KEY=
 OPENAI_API_KEY=
 ```
+
+### API 키 유출 대응 절차
+
+API 키나 Supabase secret key가 코드, README, 스크린샷, 커밋 이력에 노출된 것이 의심되면 아래 순서로 대응합니다.
+
+1. 노출된 키를 즉시 폐기하거나 재발급합니다.
+2. Supabase, OpenAI, Vercel에 새 키를 등록합니다.
+3. 로컬 `.env` 파일의 값을 새 키로 교체합니다.
+4. GitHub 코드와 README, `docs/evidence/` 스크린샷에 키가 남아 있지 않은지 확인합니다.
+5. 키가 커밋 이력에 포함되었다면 해당 키는 재사용하지 않고, 필요 시 Git 이력 정리 도구로 노출 흔적을 제거합니다.
+6. Vercel에서 Production 재배포를 실행하고 `/api/opportunities`, `/api/recommend`가 정상 동작하는지 확인합니다.
+
+### 환경 변수 또는 프레임워크 변경 영향 체크리스트
+
+환경 변수 이름, API 경로, 백엔드 프레임워크 설정을 바꾸면 다음 항목을 함께 확인합니다.
+
+- `.env.example`, 로컬 `.env`, Vercel Environment Variables의 변수 이름이 모두 일치하는지 확인합니다.
+- `api/opportunities.py`에서 읽는 환경 변수 이름과 Vercel에 등록한 이름이 같은지 확인합니다.
+- `requirements.txt`에 필요한 Python 패키지가 모두 포함되어 있는지 확인합니다.
+- 프론트엔드의 `fetch` 경로가 배포 환경에서는 `/api/...`, 로컬 환경에서는 `http://127.0.0.1:8000/api/...`로 동작하는지 확인합니다.
+- CORS 허용 origin에 로컬 미리보기 주소가 포함되어 있는지 확인합니다.
+- 변경 후 로컬 API 서버와 Vercel Production 배포에서 네비게이션, 기회 탐색, AI 추천 기능을 다시 테스트합니다.
 
 ## 로컬 실행 방법
 

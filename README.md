@@ -99,6 +99,29 @@ API 키나 Supabase secret key가 코드, README, 스크린샷, 커밋 이력에
 - CORS 허용 origin에 로컬 미리보기 주소가 포함되어 있는지 확인합니다.
 - 변경 후 로컬 API 서버와 Vercel Production 배포에서 네비게이션, 기회 탐색, AI 추천 기능을 다시 테스트합니다.
 
+### 기능 확장 단계 체크리스트
+
+새 기능을 추가할 때는 기획, 구현, 검증, 배포를 한 번에 바꾸지 않고 아래 순서로 진행합니다.
+
+1. 확장 목적 정의: 어떤 사용자 문제를 해결하는지, 기존 기회 탐색/AI 추천 흐름과 어떻게 연결되는지 작성합니다.
+2. 영향 범위 확인: 변경 대상이 `public/` 화면인지, `api/` 백엔드인지, `supabase/` 스키마인지, 환경 변수 추가가 필요한지 확인합니다.
+3. 데이터 변경 검토: 새 필드나 테이블이 필요하면 Supabase schema/seed 변경과 기존 데이터 호환성을 먼저 확인합니다.
+4. API 계약 정의: 새 엔드포인트, 요청 필드, 응답 구조, 오류 메시지를 문서화한 뒤 프론트에서 호출합니다.
+5. 프론트엔드 구현: HTML 구조, CSS 반응형 스타일, JavaScript 이벤트 처리와 로딩/오류 상태를 함께 구현합니다.
+6. 보안 검토: API 키, secret, 관리자용 데이터가 브라우저 JavaScript나 스크린샷에 노출되지 않는지 확인합니다.
+7. 로컬 테스트: Live Preview와 로컬 API 서버에서 기존 기능(기회 탐색, 상세, AI 추천)과 새 기능을 함께 확인합니다.
+8. 배포 전 점검: `python3 -m py_compile api/opportunities.py`, `git diff --check`를 실행하고 README/기획서 변경이 필요한지 확인합니다.
+9. 배포 및 모니터링: `git push origin main` 후 Vercel Production 배포가 `Ready`인지 확인하고, 브라우저 Console/Network와 Vercel Runtime Logs를 점검합니다.
+
+기능 확장 시 영향 평가 항목:
+
+- 사용자 영향: 기존 메뉴 이동, 검색/필터, AI 추천 결과 표시가 깨지지 않는가?
+- 데이터 영향: 기존 Supabase 테이블과 seed 데이터가 계속 조회되는가?
+- API 영향: 기존 `/api/opportunities`, `/api/opportunities/{slug}`, `/api/recommend` 응답 구조가 유지되는가?
+- 비용/성능 영향: AI 호출 횟수, 후보 데이터 크기, 응답 시간이 증가하지 않는가?
+- 운영 영향: 추가 환경 변수, 도메인, CORS, Vercel 설정 변경이 필요한가?
+- 제출/문서 영향: README, 서비스 기획서, 증빙 스크린샷을 갱신해야 하는가?
+
 ## 로컬 실행 방법
 
 1. 의존성을 설치합니다.

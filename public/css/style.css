@@ -343,12 +343,10 @@ a {
   }
 
   .main-navigation {
+    flex-wrap: wrap;
     gap: 14px;
+    justify-content: flex-end;
     font-size: 13px;
-  }
-
-  .main-navigation a:last-child {
-    display: none;
   }
 
   .hero {
@@ -1214,4 +1212,151 @@ a {
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+.about-page {
+  width: min(calc(100% - 40px), var(--content-width));
+  margin: 0 auto;
+  padding: 72px 0 100px;
+}
+
+.about-heading {
+  max-width: 860px;
+}
+
+.about-mission {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin-top: 52px;
+}
+
+.about-mission div,
+.principle-grid article,
+.about-cta {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 22px;
+}
+
+.about-mission div {
+  padding: 28px;
+}
+
+.about-mission span {
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.about-mission h2,
+.about-section-header h2,
+.about-cta h2 {
+  margin: 8px 0 12px;
+  letter-spacing: -0.04em;
+}
+
+.about-mission h2 {
+  font-size: 23px;
+}
+
+.about-mission p,
+.principle-grid p,
+.about-cta p {
+  margin: 0;
+  color: var(--color-text-muted);
+  word-break: keep-all;
+}
+
+.about-section {
+  margin-top: 72px;
+}
+
+.about-section-header {
+  max-width: 620px;
+  margin-bottom: 24px;
+}
+
+.about-section-header h2,
+.about-cta h2 {
+  font-size: clamp(30px, 4vw, 42px);
+  line-height: 1.2;
+}
+
+.principle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18px;
+}
+
+.principle-grid article {
+  padding: 26px;
+}
+
+.principle-grid h3 {
+  margin: 0 0 10px;
+  font-size: 20px;
+  letter-spacing: -0.035em;
+}
+
+.about-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+  padding: 34px;
+  margin-top: 72px;
+  background:
+    linear-gradient(145deg, #fff 0%, #f6f5ff 100%);
+}
+
+.about-cta > div:first-child {
+  max-width: 650px;
+}
+
+.about-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .about-mission,
+  .principle-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .about-cta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 640px) {
+  .about-page {
+    width: min(calc(100% - 32px), var(--content-width));
+    padding: 52px 0 72px;
+  }
+
+  .about-mission {
+    margin-top: 36px;
+  }
+
+  .about-mission div,
+  .principle-grid article,
+  .about-cta {
+    padding: 22px;
+    border-radius: 18px;
+  }
+
+  .about-section,
+  .about-cta {
+    margin-top: 52px;
+  }
+
+  .about-actions {
+    display: grid;
+    width: 100%;
+  }
 }

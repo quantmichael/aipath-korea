@@ -619,6 +619,8 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
+  min-height: 28px;
   padding-right: 130px;
 }
 

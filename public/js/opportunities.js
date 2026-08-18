@@ -16,6 +16,9 @@ const priceFilter = document.querySelector("#price-filter");
 
 let allOpportunities = [];
 
+const initialParams = new URLSearchParams(window.location.search);
+const initialCategory = initialParams.get("category");
+
 const statusLabels = {
   scheduled: "모집 예정",
   open: "모집 중",
@@ -240,6 +243,17 @@ async function loadOpportunities() {
     const data = await response.json();
 
     allOpportunities = data.opportunities || [];
+
+    const hasInitialCategory = Array.from(categoryFilter.options).some(
+      (option) => option.value === initialCategory,
+    );
+
+    if (initialCategory && hasInitialCategory) {
+      categoryFilter.value = initialCategory;
+      applyFilters();
+      return;
+    }
+
     renderOpportunities(allOpportunities);
   } catch (error) {
     console.error(error);
@@ -267,4 +281,3 @@ searchInput.addEventListener("input", applyFilters);
 });
 
 loadOpportunities();
-

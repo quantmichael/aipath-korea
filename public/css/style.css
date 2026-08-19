@@ -52,21 +52,22 @@ a {
 }
 
 .logo {
-  display: flex;
-  gap: 10px;
+  display: inline-flex;
   align-items: center;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
-.logo-mark {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  color: #fff;
-  background: var(--color-primary);
-  border-radius: 10px;
-  place-items: center;
+.logo-picture,
+.logo-image {
+  display: block;
+}
+
+.logo-image {
+  width: auto;
+  height: 38px;
+  max-width: 178px;
+  object-fit: contain;
 }
 
 .main-navigation {
@@ -333,14 +334,12 @@ a {
   }
 
   .logo {
-    font-size: 14px;
+    max-width: 138px;
   }
 
-  .logo-mark {
-    width: 32px;
-    height: 32px;
-    border-radius: 9px;
-    font-size: 13px;
+  .logo-image {
+    height: 30px;
+    max-width: 138px;
   }
 
   .main-navigation {
@@ -1404,27 +1403,28 @@ a {
 
 .card-avatar {
   display: flex;
-  gap: 8px;
   align-items: center;
-  min-width: 138px;
-  min-height: 70px;
-  padding: 0 16px;
+  width: 190px;
+  min-height: 78px;
+  padding: 0 18px;
   margin-top: -43px;
   margin-bottom: 18px;
-  color: var(--color-text);
   background: #fff;
   border: 5px solid #fff;
   border-radius: 22px;
   box-shadow: 0 14px 34px rgb(37 38 78 / 18%);
-  font-weight: 900;
   justify-content: center;
 }
 
-.card-avatar .logo-mark {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  font-size: 13px;
+.card-logo,
+.card-logo-image {
+  display: block;
+}
+
+.card-logo-image {
+  width: 150px;
+  height: auto;
+  object-fit: contain;
 }
 
 .card-profile h1 {
@@ -1585,6 +1585,15 @@ a {
   .card-profile {
     padding-right: 30px;
     padding-left: 30px;
+  }
+
+  .card-avatar {
+    width: 214px;
+    min-height: 86px;
+  }
+
+  .card-logo-image {
+    width: 172px;
   }
 
   .card-action-row,

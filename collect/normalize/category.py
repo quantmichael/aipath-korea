@@ -35,8 +35,10 @@ CATEGORY_KEYWORDS = {
     ),
 }
 
+DEFAULT_CATEGORY_SLUG = "growth-program"
 
-def infer_category_slug(candidate: OpportunityCandidate) -> str | None:
+
+def infer_category_slug(candidate: OpportunityCandidate) -> str:
     text = " ".join(
         value
         for value in [
@@ -52,4 +54,4 @@ def infer_category_slug(candidate: OpportunityCandidate) -> str | None:
         if any(keyword.lower() in text for keyword in keywords):
             return slug
 
-    return None
+    return DEFAULT_CATEGORY_SLUG

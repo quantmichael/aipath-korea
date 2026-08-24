@@ -213,3 +213,103 @@ def upsert_candidate(
     response = supabase.table("opportunity_candidates").insert(record).execute()
     data = response.data or []
     return (data[0]["id"] if data else "", "inserted")
+
+
+def fetch_promotable_candidates(
+    supabase: Client,
+    *,
+    limit: int,
+    candidate_id: str | None = None,
+) -> list[dict[str, Any]]:
+    query = (
+        supabase.table("opportunity_candidates")
+        .select("*")
+        .eq("candidate_status", "verified")
+        .order("discovered_at", desc=False)
+        .limit(limit)
+    )
+
+    if candidate_id:
+        query = query.eq("id", candidate_id)
+
+    return query.execute().data or []
+
+
+def find_existing_opportunity_for_record(
+    supabase: Client,
+    record: dict[str, Any],
+) -> dict[str, Any] | None:
+    candidate = OpportunityCandidate(
+        source_id=record.get("source_id"),
+        external_id=record.get("external_id"),
+        official_url=record.get("official_url"),
+        slug=record.get("slug"),
+    )
+    return find_existing_opportunity(supabase, candidate)
+
+
+def upsert_draft_opportunity(
+    supabase: Client,
+    candidate: dict[str, Any],
+) -> tuple[str, str]:
+    existing = find_existing_opportunity_for_record(supabase, candidate)
+    record = _candidate_to_opportunity_record(candidate)
+
+    if existing:
+        response = (
+            supabase.table("opportunities")
+            .update(record)
+            .eq("id", existing["id"])
+            .execute()
+        )
+        data = response.data or []
+        return (data[0]["id"] if data else existing["id"], "updated")
+
+    response = supabase.table("opportunities").insert(record).execute()
+    data = response.data or []
+    return (data[0]["id"] if data else "", "inserted")
+
+
+def mark_candidate_promoted(
+    supabase: Client,
+    candidate_id: str,
+) -> None:
+    supabase.table("opportunity_candidates").update(
+        {
+            "candidate_status": "promoted",
+        }
+    ).eq("id", candidate_id).execute()
+
+
+def _candidate_to_opportunity_record(candidate: dict[str, Any]) -> dict[str, Any]:
+    title = candidate.get("title") or "제목 확인 필요"
+    summary = candidate.get("summary") or "공식 원문 확인 후 요약이 필요합니다."
+    organizer = candidate.get("organizer") or "공식 원문 확인 필요"
+
+    return {
+        "source_id": candidate.get("source_id"),
+        "category_id": candidate.get("category_id"),
+        "external_id": candidate.get("external_id"),
+        "title": title,
+        "slug": candidate.get("slug"),
+        "summary": summary,
+        "description": candidate.get("description"),
+        "organizer": organizer,
+        "target_audience": candidate.get("target_audience"),
+        "difficulty": candidate.get("difficulty"),
+        "format": candidate.get("format"),
+        "region": candidate.get("region"),
+        "venue": candidate.get("venue"),
+        "price_type": candidate.get("price_type") or "unknown",
+        "price_text": candidate.get("price_text"),
+        "application_start_at": candidate.get("application_start_at"),
+        "application_deadline_at": candidate.get("application_deadline_at"),
+        "event_start_at": candidate.get("event_start_at"),
+        "event_end_at": candidate.get("event_end_at"),
+        "official_url": candidate.get("official_url"),
+        "image_url": candidate.get("image_url"),
+        "status": "draft",
+        "is_featured": False,
+        "published_at": None,
+        "last_verified_at": candidate.get("last_verified_at"),
+    }

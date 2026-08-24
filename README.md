@@ -207,6 +207,18 @@ Collect는 Source 기반 수집부터 시작합니다. Vercel Cron은 하루 2�
 python3 -m scripts.collect --max-sources 1 --max-candidates 5 --method html
 ```
 
+검증된 후보를 공개 전 `draft` 기회로 승격할 수 있습니다.
+
+```bash
+python3 -m scripts.promote_candidates --limit 10
+```
+
+Vercel에서는 인증된 요청으로만 수동 승격합니다.
+
+```text
+POST /api/collect/promote?limit=10
+```
+
 운영 제한값은 환경 변수로 조정합니다.
 
 - `MAX_SOURCES_PER_RUN`: 1회 실행 시 처리할 Source 수

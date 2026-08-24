@@ -131,3 +131,16 @@ class CollectionResult:
                 for run in self.runs
             ],
         }
+
+
+@dataclass
+class PromotionResult:
+    selected_count: int = 0
+    promoted_count: int = 0
+    skipped_count: int = 0
+    failed_count: int = 0
+    promoted_candidates: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

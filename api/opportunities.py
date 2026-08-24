@@ -9,6 +9,7 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
 
+from collect.promote import promote_candidates
 from collect.service import run_collection
 
 load_dotenv()
@@ -414,6 +415,40 @@ def run_collect_endpoint(
         raise HTTPException(
             status_code=500,
             detail="수집 작업을 실행하지 못했습니다.",
+        ) from error
+
+    return result.to_dict()
+
+
+@app.post("/api/collect/promote")
+def promote_collect_candidates_endpoint(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_collect_secret: str | None = Header(default=None),
+    limit: int = 10,
+    candidate_id: str | None = None,
+) -> dict:
+    verify_collect_request(
+        request=request,
+        authorization=authorization,
+        x_collect_secret=x_collect_secret,
+    )
+
+    try:
+        result = promote_candidates(
+            limit=limit,
+            candidate_id=candidate_id,
+        )
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        ) from error
+    except Exception as error:
+        print(f"Candidate promotion failed: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="후보 승격을 실행하지 못했습니다.",
         ) from error
 
     return result.to_dict()

@@ -146,7 +146,7 @@ python3 -m uvicorn api.opportunities:app --reload --host 127.0.0.1 --port 8000
 
 1. GitHub 저장소에 코드를 push합니다.
 2. Vercel 프로젝트를 GitHub 저장소와 연결합니다.
-3. Vercel 환경 변수에 `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `OPENAI_API_KEY`를 등록합니다.
+3. Vercel 환경 변수에 `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `OPENAI_API_KEY`, `CRON_SECRET`를 등록합니다.
 4. Production 배포가 완료되면 Vercel URL에서 네비게이션, 반응형 화면, AI 추천 기능을 확인합니다.
 5. 필요하면 Vercel Domains에서 커스텀 도메인을 연결합니다.
 
@@ -194,3 +194,21 @@ AI 추천 기능은 외부 AI API와 DB 조회를 함께 사용하므로 네트�
 ## 수집 대상과 크롤링 전략
 
 초기 수집 대상 후보와 운영 단계별 자동화 전략은 `docs/crawling-sources.md`에 정리합니다. 공식 출처를 우선하고, 민간 모음 플랫폼은 발견용으로만 사용한 뒤 주최사 원문을 확인해 등록합니다.
+
+## Collect 운영
+
+Collect는 Source 기반 수집부터 시작합니다. Vercel Cron은 하루 2회 `/api/collect/run`을 호출하며, API는 `CRON_SECRET` 또는 `COLLECT_SECRET` 인증을 통과한 요청만 실행합니다.
+
+수집 결과는 검증 전 공개 테이블에 바로 저장하지 않고 `opportunity_candidates`에 후보로 저장합니다. 기존 `opportunities` 화면과 AI 추천은 `draft`, `cancelled`를 제외한 검증 데이터만 읽으므로 수집 실패나 미검증 후보가 사용자 화면에 바로 노출되지 않습니다.
+
+로컬에서 같은 수집 엔진을 테스트할 수 있습니다.
+
+```bash
+python3 -m scripts.collect --max-sources 1 --max-candidates 5 --method html
+```
+
+운영 제한값은 환경 변수로 조정합니다.
+
+- `MAX_SOURCES_PER_RUN`: 1회 실행 시 처리할 Source 수
+- `MAX_CANDIDATES_PER_SOURCE`: Source당 후보 링크 수
+- `CRON_SECRET` 또는 `COLLECT_SECRET`: 수집 API 인증값

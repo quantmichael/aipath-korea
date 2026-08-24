@@ -190,6 +190,44 @@ on conflict (name) do update set
   notes = excluded.notes,
   last_terms_checked_at = excluded.last_terms_checked_at;
 
+update public.sources
+set
+  collection_url = homepage_url,
+  is_active = true
+where collection_url is null
+  and homepage_url is not null;
+
+update public.sources
+set
+  source_type = 'discovery',
+  collection_method = 'html'
+where name in (
+  '온오프믹스',
+  '콘테스트코리아',
+  '씽굿',
+  '기업마당'
+);
+
+update public.sources
+set
+  source_type = 'regular',
+  collection_method = 'html'
+where name in (
+  'AI Hub',
+  '정보통신산업진흥원(NIPA)',
+  '서울 AI 허브',
+  'K-Startup 창업지원포털',
+  '고용24 K-디지털 훈련',
+  'DACON',
+  'K-ICT 창업멘토링센터',
+  '인천테크노파크',
+  '경기창조경제혁신센터',
+  '전남테크노파크',
+  '경남테크노파크',
+  '인천광역시교육청',
+  '한국인공지능학회'
+);
+
 commit;
 
 select 'categories' as table_name, count(*) as row_count from public.categories

@@ -9,8 +9,20 @@ create table public.sources (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   homepage_url text,
+  source_type text not null default 'regular'
+    check (source_type in ('regular', 'irregular', 'discovery')),
+  collection_url text,
   collection_method text not null default 'manual'
-    check (collection_method in ('manual', 'api', 'submission')),
+    check (collection_method in (
+      'manual',
+      'api',
+      'rss',
+      'html',
+      'ai_extract',
+      'ai_search',
+      'submission'
+    )),
+  is_active boolean not null default true,
   license_name text,
   commercial_use_allowed boolean,
   modification_allowed boolean,
@@ -18,6 +30,9 @@ create table public.sources (
   attribution_text text,
   terms_url text,
   last_terms_checked_at timestamptz,
+  last_collected_at timestamptz,
+  last_collection_status text
+    check (last_collection_status in ('success', 'failed', 'partial')),
   notes text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -93,6 +108,89 @@ create index opportunities_application_deadline_idx
 create index opportunities_event_start_idx on public.opportunities (event_start_at);
 create index opportunities_published_at_idx on public.opportunities (published_at);
 
+create table public.collection_runs (
+  id uuid primary key default gen_random_uuid(),
+  source_id uuid references public.sources(id) on delete set null,
+  collection_method text not null
+    check (collection_method in (
+      'manual',
+      'api',
+      'rss',
+      'html',
+      'ai_extract',
+      'ai_search',
+      'submission'
+    )),
+  started_at timestamptz not null default now(),
+  finished_at timestamptz,
+  status text not null default 'running'
+    check (status in ('running', 'success', 'failed', 'partial')),
+  found_count integer not null default 0 check (found_count >= 0),
+  inserted_count integer not null default 0 check (inserted_count >= 0),
+  updated_count integer not null default 0 check (updated_count >= 0),
+  duplicate_count integer not null default 0 check (duplicate_count >= 0),
+  failed_count integer not null default 0 check (failed_count >= 0),
+  error_message text,
+  created_at timestamptz not null default now()
+);
+
+create index collection_runs_source_id_idx on public.collection_runs (source_id);
+create index collection_runs_started_at_idx on public.collection_runs (started_at desc);
+
+create table public.opportunity_candidates (
+  id uuid primary key default gen_random_uuid(),
+  source_id uuid references public.sources(id) on delete set null,
+  collection_run_id uuid references public.collection_runs(id) on delete set null,
+  category_id uuid references public.categories(id) on delete set null,
+  external_id text,
+  title text,
+  slug text,
+  summary text,
+  description text,
+  organizer text,
+  target_audience text,
+  difficulty text check (difficulty in ('beginner', 'intermediate', 'advanced', 'all')),
+  format text check (format in ('online', 'offline', 'hybrid')),
+  region text,
+  venue text,
+  price_type text check (price_type in ('free', 'paid', 'mixed', 'unknown')),
+  price_text text,
+  application_start_at timestamptz,
+  application_deadline_at timestamptz,
+  event_start_at timestamptz,
+  event_end_at timestamptz,
+  official_url text,
+  image_url text,
+  candidate_status text not null default 'pending'
+    check (candidate_status in (
+      'pending',
+      'needs_review',
+      'verified',
+      'rejected',
+      'promoted',
+      'duplicate'
+    )),
+  validation_errors jsonb not null default '[]'::jsonb,
+  raw_payload jsonb not null default '{}'::jsonb,
+  discovered_at timestamptz not null default now(),
+  last_verified_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index opportunity_candidates_source_external_id_unique
+  on public.opportunity_candidates (source_id, external_id)
+  where source_id is not null and external_id is not null;
+
+create unique index opportunity_candidates_official_url_unique
+  on public.opportunity_candidates (official_url)
+  where official_url is not null;
+
+create index opportunity_candidates_status_idx
+  on public.opportunity_candidates (candidate_status);
+create index opportunity_candidates_discovered_at_idx
+  on public.opportunity_candidates (discovered_at desc);
+
 create table public.tags (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -141,11 +239,17 @@ create trigger tags_set_updated_at
 before update on public.tags
 for each row execute function public.set_updated_at();
 
+create trigger opportunity_candidates_set_updated_at
+before update on public.opportunity_candidates
+for each row execute function public.set_updated_at();
+
 alter table public.sources enable row level security;
 alter table public.categories enable row level security;
 alter table public.opportunities enable row level security;
 alter table public.tags enable row level security;
 alter table public.opportunity_tags enable row level security;
+alter table public.collection_runs enable row level security;
+alter table public.opportunity_candidates enable row level security;
 
 -- The browser must use the Python API instead of reading or writing tables directly.
 revoke all on table public.sources from anon, authenticated;
@@ -153,11 +257,15 @@ revoke all on table public.categories from anon, authenticated;
 revoke all on table public.opportunities from anon, authenticated;
 revoke all on table public.tags from anon, authenticated;
 revoke all on table public.opportunity_tags from anon, authenticated;
+revoke all on table public.collection_runs from anon, authenticated;
+revoke all on table public.opportunity_candidates from anon, authenticated;
 
 grant all on table public.sources to service_role;
 grant all on table public.categories to service_role;
 grant all on table public.opportunities to service_role;
 grant all on table public.tags to service_role;
 grant all on table public.opportunity_tags to service_role;
+grant all on table public.collection_runs to service_role;
+grant all on table public.opportunity_candidates to service_role;
 
 commit;

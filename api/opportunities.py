@@ -3,11 +3,13 @@ import os
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
+
+from collect.service import run_collection
 
 load_dotenv()
 
@@ -379,3 +381,75 @@ def recommend_opportunities(
         "recommendations": verified_recommendations,
         "message": message,
     }
+
+
+@app.get("/api/collect/run")
+def run_collect_endpoint(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_collect_secret: str | None = Header(default=None),
+    max_sources: int | None = None,
+    max_candidates: int | None = None,
+    method: str | None = None,
+) -> dict:
+    verify_collect_request(
+        request=request,
+        authorization=authorization,
+        x_collect_secret=x_collect_secret,
+    )
+
+    try:
+        result = run_collection(
+            max_sources=max_sources,
+            max_candidates_per_source=max_candidates,
+            method=method,
+        )
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        ) from error
+    except Exception as error:
+        print(f"Collection run failed: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="수집 작업을 실행하지 못했습니다.",
+        ) from error
+
+    return result.to_dict()
+
+
+def verify_collect_request(
+    *,
+    request: Request,
+    authorization: str | None,
+    x_collect_secret: str | None,
+) -> None:
+    expected_secret = (
+        os.environ.get("COLLECT_SECRET")
+        or os.environ.get("CRON_SECRET")
+    )
+
+    if not expected_secret:
+        raise HTTPException(
+            status_code=500,
+            detail="COLLECT_SECRET 또는 CRON_SECRET 환경변수가 필요합니다.",
+        )
+
+    query_secret = request.query_params.get("secret")
+    bearer_secret = None
+
+    if authorization and authorization.lower().startswith("bearer "):
+        bearer_secret = authorization.split(" ", 1)[1].strip()
+
+    provided_values = {
+        value
+        for value in [query_secret, bearer_secret, x_collect_secret]
+        if value
+    }
+
+    if expected_secret not in provided_values:
+        raise HTTPException(
+            status_code=401,
+            detail="수집 API 인증에 실패했습니다.",
+        )

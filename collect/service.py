@@ -140,12 +140,10 @@ def _collect_candidates(
 
 
 def _status_from_summary(summary: CollectionRunSummary) -> str:
-    if summary.failed_count and (
-        summary.inserted_count or summary.duplicate_count
-    ):
-        return "partial"
-
-    if summary.failed_count and not summary.inserted_count:
+    if summary.error_message:
         return "failed"
+
+    if summary.failed_count:
+        return "partial"
 
     return "success"

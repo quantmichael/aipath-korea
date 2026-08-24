@@ -4,13 +4,35 @@ from collect.models import OpportunityCandidate
 
 
 CATEGORY_KEYWORDS = {
-    "education": ("교육", "강의", "부트캠프", "과정", "수강", "캠프"),
+    "education": (
+        "교육",
+        "강의",
+        "부트캠프",
+        "과정",
+        "수강",
+        "캠프",
+        "교육생",
+        "아카데미",
+        "class",
+        "course",
+    ),
     "competition": ("공모전", "경진대회", "대회", "contest"),
     "hackathon": ("해커톤", "hackathon"),
     "meetup": ("밋업", "meetup", "네트워킹", "모임"),
-    "conference": ("콘퍼런스", "컨퍼런스", "conference", "세미나"),
+    "conference": ("콘퍼런스", "컨퍼런스", "conference", "세미나", "포럼"),
     "webinar": ("웨비나", "webinar", "온라인 설명회"),
-    "growth-program": ("멘토링", "창업", "성장", "취업", "커리어"),
+    "growth-program": (
+        "멘토링",
+        "창업",
+        "성장",
+        "취업",
+        "커리어",
+        "프로그램",
+        "지원사업",
+        "참가자",
+        "모집",
+        "사업화",
+    ),
 }
 
 

@@ -193,32 +193,63 @@ on conflict (name) do update set
 update public.sources
 set
   collection_url = homepage_url,
-  is_active = true
-where collection_url is null
-  and homepage_url is not null;
+  is_active = false,
+  collection_method = 'manual'
+where homepage_url is not null;
 
 update public.sources
 set
-  source_type = 'discovery',
-  collection_method = 'html'
+  collection_url = case name
+    when 'AI Hub' then 'https://www.aihub.or.kr/aihubnews/bsnspblanc/list.do'
+    when '정보통신산업진흥원(NIPA)' then 'https://www.nipa.kr/home/2-2'
+    when 'DACON' then 'https://dacon.io/competitions'
+    when '기업마당' then 'https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/list.do'
+    else collection_url
+  end,
+  source_type = 'regular',
+  collection_method = 'html',
+  is_active = true
 where name in (
-  '온오프믹스',
-  '콘테스트코리아',
-  '씽굿',
+  'AI Hub',
+  '정보통신산업진흥원(NIPA)',
+  'DACON',
   '기업마당'
 );
 
 update public.sources
 set
-  source_type = 'regular',
-  collection_method = 'html'
+  collection_url = 'https://www.seoulaihub.kr/index.asp',
+  source_type = 'irregular',
+  collection_method = 'manual',
+  is_active = false
+where name = '서울 AI 허브';
+
+update public.sources
+set
+  collection_url = 'https://www.k-startup.go.kr/web/contents/bizpbanc-ongoing.do',
+  source_type = 'irregular',
+  collection_method = 'manual',
+  is_active = false
+where name = 'K-Startup 창업지원포털';
+
+update public.sources
+set
+  source_type = 'discovery',
+  collection_method = 'manual',
+  is_active = false
 where name in (
-  'AI Hub',
-  '정보통신산업진흥원(NIPA)',
-  '서울 AI 허브',
-  'K-Startup 창업지원포털',
+  '온오프믹스',
+  '콘테스트코리아',
+  '씽굿'
+);
+
+update public.sources
+set
+  source_type = 'irregular',
+  collection_method = 'manual',
+  is_active = false
+where name in (
   '고용24 K-디지털 훈련',
-  'DACON',
   'K-ICT 창업멘토링센터',
   '인천테크노파크',
   '경기창조경제혁신센터',

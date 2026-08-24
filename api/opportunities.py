@@ -389,6 +389,7 @@ def run_collect_endpoint(
     request: Request,
     authorization: str | None = Header(default=None),
     x_collect_secret: str | None = Header(default=None),
+    limit: int | None = None,
     max_sources: int | None = None,
     max_candidates: int | None = None,
     method: str | None = None,
@@ -401,7 +402,7 @@ def run_collect_endpoint(
 
     try:
         result = run_collection(
-            max_sources=max_sources,
+            max_sources=max_sources or limit,
             max_candidates_per_source=max_candidates,
             method=method,
         )

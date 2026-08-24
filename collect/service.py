@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 
+from collect.collectors.api import collect_api_source
 from collect.collectors.html import collect_html_source
 from collect.models import CollectionResult, CollectionRunSummary, Source
 from collect.normalize.category import infer_category_slug
@@ -134,7 +135,13 @@ def _collect_candidates(
             max_candidates=max_candidates,
         )
 
-    # Manual/API/RSS/AI collectors are intentionally not faked. They can be
+    if source.collection_method == "api":
+        return collect_api_source(
+            source,
+            max_candidates=max_candidates,
+        )
+
+    # Manual/RSS/AI collectors are intentionally not faked. They can be
     # plugged into this dispatch table as each source is validated.
     return []
 

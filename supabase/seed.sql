@@ -203,7 +203,6 @@ set
     when 'AI Hub' then 'https://www.aihub.or.kr/aihubnews/bsnspblanc/list.do'
     when '정보통신산업진흥원(NIPA)' then 'https://www.nipa.kr/home/2-2'
     when 'DACON' then 'https://dacon.io/competitions'
-    when '기업마당' then 'https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/list.do'
     else collection_url
   end,
   source_type = 'regular',
@@ -212,9 +211,16 @@ set
 where name in (
   'AI Hub',
   '정보통신산업진흥원(NIPA)',
-  'DACON',
-  '기업마당'
+  'DACON'
 );
+
+update public.sources
+set
+  collection_url = 'https://www.bizinfo.go.kr/uss/rss/bizinfoApi.do',
+  source_type = 'regular',
+  collection_method = 'api',
+  is_active = true
+where name = '기업마당';
 
 update public.sources
 set

@@ -75,6 +75,9 @@ aipath-korea/
 SUPABASE_URL=
 SUPABASE_SECRET_KEY=
 OPENAI_API_KEY=
+COLLECT_SECRET=
+CRON_SECRET=
+BIZINFO_API_KEY=
 ```
 
 ### API 키 유출 대응 절차
@@ -146,7 +149,7 @@ python3 -m uvicorn api.opportunities:app --reload --host 127.0.0.1 --port 8000
 
 1. GitHub 저장소에 코드를 push합니다.
 2. Vercel 프로젝트를 GitHub 저장소와 연결합니다.
-3. Vercel 환경 변수에 `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `OPENAI_API_KEY`, `CRON_SECRET`를 등록합니다.
+3. Vercel 환경 변수에 `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `OPENAI_API_KEY`, `CRON_SECRET`, `COLLECT_SECRET`, `BIZINFO_API_KEY`를 등록합니다.
 4. Production 배포가 완료되면 Vercel URL에서 네비게이션, 반응형 화면, AI 추천 기능을 확인합니다.
 5. 필요하면 Vercel Domains에서 커스텀 도메인을 연결합니다.
 
@@ -158,7 +161,7 @@ python3 -m uvicorn api.opportunities:app --reload --host 127.0.0.1 --port 8000
 2. 배포가 실패했으면 해당 배포 상세 화면의 `Build Logs`와 `Runtime Logs`를 확인합니다.
 3. 브라우저 개발자 도구의 `Console` 탭에서 JavaScript 오류를 확인합니다.
 4. 브라우저 개발자 도구의 `Network` 탭에서 `/api/opportunities`, `/api/recommend` 요청 상태 코드를 확인합니다.
-5. API 응답이 500 또는 502이면 Vercel 환경 변수 3개가 등록되어 있는지 다시 확인합니다.
+5. API 응답이 500 또는 502이면 필요한 Vercel 환경 변수가 등록되어 있는지 다시 확인합니다.
 6. 로컬에서 `python3 -m py_compile api/opportunities.py`로 Python 문법 오류를 확인합니다.
 7. 로컬에서 API 서버와 Live Preview를 실행해 같은 문제가 재현되는지 확인합니다.
 8. 원인을 수정한 뒤 `git add`, `git commit`, `git push origin main`을 실행합니다.
@@ -199,6 +202,8 @@ AI 추천 기능은 외부 AI API와 DB 조회를 함께 사용하므로 네트�
 
 Collect는 Source 기반 수집부터 시작합니다. Vercel Cron은 하루 2회 `/api/collect/run`을 호출하며, API는 `CRON_SECRET` 또는 `COLLECT_SECRET` 인증을 통과한 요청만 실행합니다.
 
+수집 방식은 소스별로 나눕니다. 기업마당은 공식 API(`BIZINFO_API_KEY`)를 사용하고, AI Hub, NIPA, DACON처럼 RSS/API가 확인되지 않은 소스는 HTML 수집기와 source adapter를 통해 목록/상세 URL을 검증합니다. 테스트 실행 시 `limit=1` 또는 `max_sources=1`로 source 개수를 제한할 수 있습니다.
+
 수집 결과는 검증 전 공개 테이블에 바로 저장하지 않고 `opportunity_candidates`에 후보로 저장합니다. 기존 `opportunities` 화면과 AI 추천은 `draft`, `cancelled`를 제외한 검증 데이터만 읽으므로 수집 실패나 미검증 후보가 사용자 화면에 바로 노출되지 않습니다.
 
 로컬에서 같은 수집 엔진을 테스트할 수 있습니다.
@@ -224,3 +229,4 @@ POST /api/collect/promote?limit=10
 - `MAX_SOURCES_PER_RUN`: 1회 실행 시 처리할 Source 수
 - `MAX_CANDIDATES_PER_SOURCE`: Source당 후보 링크 수
 - `CRON_SECRET` 또는 `COLLECT_SECRET`: 수집 API 인증값
+- `BIZINFO_API_KEY`: 기업마당 공식 API 인증키

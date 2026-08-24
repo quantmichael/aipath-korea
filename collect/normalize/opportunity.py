@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from collect.models import OpportunityCandidate
 
@@ -23,6 +23,12 @@ def slugify(value: str) -> str:
 def slug_from_url(url: str) -> str:
     parsed = urlparse(url)
     parts = [parsed.netloc.replace("www.", ""), parsed.path]
+    query_parts = [
+        f"{key}-{value}"
+        for key, value in parse_qsl(parsed.query, keep_blank_values=False)
+        if key and value
+    ]
+    parts.extend(query_parts)
     slug = slugify("-".join(parts))
     return slug[:80].strip("-") or "opportunity"
 

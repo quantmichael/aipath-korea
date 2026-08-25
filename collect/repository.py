@@ -259,7 +259,6 @@ def fetch_candidate_review_rows(
             official_url,
             candidate_status,
             validation_errors,
-            raw_payload,
             discovered_at,
             created_at,
             updated_at,

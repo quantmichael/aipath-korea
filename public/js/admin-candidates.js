@@ -117,7 +117,7 @@ async function loadCandidates() {
   renderMessage("후보를 불러오는 중입니다.");
 
   try {
-    const response = await fetch(`${API_BASE_URL}/candidates?limit=200`, {
+    const response = await fetch(`${API_BASE_URL}/candidates?limit=50`, {
       headers: {
         "X-Collect-Secret": adminSecret,
       },
@@ -135,7 +135,10 @@ async function loadCandidates() {
     applyFilters();
   } catch (error) {
     console.error(error);
-    renderMessage("후보를 불러오지 못했습니다. 관리자 키와 API 상태를 확인하세요.", true);
+    renderMessage(
+      `후보를 불러오지 못했습니다. ${error.message}`,
+      true,
+    );
   }
 }
 
@@ -365,7 +368,13 @@ function showCandidateDetail(candidate) {
     detailList.append(wrapper);
   });
 
-  detailRaw.textContent = JSON.stringify(candidate.raw_payload || {}, null, 2);
+  detailRaw.textContent = JSON.stringify(
+    candidate.raw_payload || {
+      message: "목록 성능을 위해 raw payload는 목록 응답에서 제외했습니다.",
+    },
+    null,
+    2,
+  );
 }
 
 async function applyAction(action, candidateIds) {

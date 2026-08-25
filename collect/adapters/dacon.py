@@ -13,8 +13,24 @@ class TextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.parts: list[str] = []
+        self.skip_depth = 0
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if tag in {"script", "style", "noscript"}:
+            self.skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style", "noscript"} and self.skip_depth:
+            self.skip_depth -= 1
 
     def handle_data(self, data: str) -> None:
+        if self.skip_depth:
+            return
+
         text = " ".join(data.split())
         if text:
             self.parts.append(text)
@@ -119,11 +135,13 @@ def _extract_summary(lines: list[str]) -> str | None:
     background = _extract_section(lines, "[배경]", stop_headings=("[대회 방식]",))
     conference_intro = _extract_intro_before_heading(lines, "[컨퍼런스 개요]")
 
-    summary_parts = [value for value in (topic, background, conference_intro) if value]
-    if not summary_parts:
+    summary_lines = _compact_summary_lines(
+        [value for value in (topic, background, conference_intro) if value]
+    )
+    if not summary_lines:
         return None
 
-    return "\n\n".join(summary_parts)[:1000]
+    return "\n".join(summary_lines)[:700]
 
 
 def _extract_section(
@@ -146,7 +164,7 @@ def _extract_section(
 
         values.append(line)
 
-    return "\n".join(values).strip() or None
+    return "\n".join(values[:3]).strip() or None
 
 
 def _extract_after_heading(lines: list[str], heading: str) -> str | None:
@@ -189,7 +207,9 @@ def _extract_subtitle_organizer(
     if not title:
         return None
 
-    title_index = _find_heading_index(lines, title)
+    title_index = _find_exact_line_index(lines, title)
+    if title_index is None:
+        title_index = _find_heading_index(lines, title)
     if title_index is None:
         return None
 
@@ -236,7 +256,7 @@ def _extract_intro_before_heading(lines: list[str], heading: str) -> str | None:
 
         values.append(line)
 
-    return "\n".join(values[-3:]).strip() or None
+    return "\n".join(values[-2:]).strip() or None
 
 
 def _extract_conference_event_start(lines: list[str]) -> str | None:
@@ -299,12 +319,71 @@ def _find_heading_index(lines: list[str], heading: str) -> int | None:
     return None
 
 
+def _find_exact_line_index(lines: list[str], value: str) -> int | None:
+    for index, line in enumerate(lines):
+        if line == value:
+            return index
+
+    return None
+
+
 def _value_after_dash_or_colon(line: str) -> str | None:
     parts = re.split(r"\s[-:]\s|:", line, maxsplit=1)
     if len(parts) < 2:
         return None
 
     return parts[1].strip() or None
+
+
+def _compact_summary_lines(values: list[str]) -> list[str]:
+    lines: list[str] = []
+
+    for value in values:
+        for line in value.splitlines():
+            for sentence in _split_sentences(line):
+                if sentence and sentence not in lines:
+                    lines.append(sentence)
+
+                if len(lines) >= 4:
+                    return lines
+
+    return lines
+
+
+def _split_sentences(value: str) -> list[str]:
+    normalized = " ".join(value.split())
+    if not normalized:
+        return []
+
+    sentences = re.split(r"(?<=[.!?。])\s+", normalized)
+    cleaned = [sentence.strip() for sentence in sentences if sentence.strip()]
+    if len(cleaned) > 1:
+        return _split_long_sentences(cleaned)
+
+    if len(normalized) <= 160:
+        return [normalized]
+
+    return _split_long_sentences([normalized])
+
+
+def _split_long_sentences(sentences: list[str]) -> list[str]:
+    lines: list[str] = []
+
+    for sentence in sentences:
+        if len(sentence) <= 160:
+            lines.append(sentence)
+            continue
+
+        chunks = re.split(
+            r"\s+(?=또한|특히|본 대회는|최근|아래와 같이|☞|이를 통해|참가자는|본 컨퍼런스는)",
+            sentence,
+        )
+        if len(chunks) == 1:
+            chunks = re.split(r"(?<=,)\s+", sentence)
+
+        lines.extend(chunk.strip() for chunk in chunks if chunk.strip())
+
+    return lines
 
 
 def _next_non_noise_line(lines: list[str], start_index: int) -> str | None:

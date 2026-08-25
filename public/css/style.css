@@ -737,8 +737,7 @@ a {
 
 .admin-auth-panel,
 .admin-dashboard,
-.admin-review-section,
-.candidate-detail-panel {
+.admin-review-section {
   margin-top: 28px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -1025,17 +1024,32 @@ a {
   background: #fff5f5;
 }
 
-.candidate-detail-panel {
-  padding: 24px;
+.candidate-inline-detail {
+  padding: 20px;
+  background: #fafafe;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
 }
 
-.candidate-detail-header {
+.candidate-detail-row td {
+  padding: 0 15px 15px;
+  background: #fff;
+}
+
+.candidate-inline-header {
   display: flex;
   gap: 18px;
   align-items: start;
   justify-content: space-between;
-  padding-bottom: 18px;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--color-border);
+}
+
+.candidate-inline-header h3 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.4;
+  letter-spacing: -0.03em;
 }
 
 .admin-icon-button {
@@ -1074,18 +1088,6 @@ a {
   grid-column: 1 / -1;
 }
 
-.candidate-raw {
-  max-height: 360px;
-  padding: 16px;
-  overflow: auto;
-  color: #303038;
-  background: #f7f8fc;
-  border: 1px solid var(--color-border);
-  border-radius: 14px;
-  font-size: 12px;
-  white-space: pre-wrap;
-}
-
 @media (max-width: 900px) {
   .admin-auth-panel,
   .admin-toolbar {
@@ -1115,8 +1117,7 @@ a {
   }
 
   .admin-auth-panel,
-  .admin-review-section,
-  .candidate-detail-panel {
+  .admin-review-section {
     padding: 18px;
     border-radius: 18px;
   }

@@ -17,11 +17,6 @@ const categoryFilter = document.querySelector("#category-filter");
 const tableBody = document.querySelector("#candidate-table-body");
 const selectAll = document.querySelector("#select-all");
 const selectionCount = document.querySelector("#selection-count");
-const detailPanel = document.querySelector("#detail-panel");
-const detailTitle = document.querySelector("#detail-title");
-const detailList = document.querySelector("#detail-list");
-const detailRaw = document.querySelector("#detail-raw");
-const detailClose = document.querySelector("#detail-close");
 
 const metrics = {
   total: document.querySelector("#metric-total"),
@@ -44,6 +39,7 @@ let adminSecret = localStorage.getItem(SECRET_STORAGE_KEY) || "";
 let candidates = [];
 let filteredCandidates = [];
 let selectedIds = new Set();
+let expandedCandidateId = null;
 
 if (adminSecret) {
   secretInput.value = adminSecret;
@@ -234,6 +230,10 @@ function renderCandidates() {
 
   filteredCandidates.forEach((candidate) => {
     tableBody.append(createCandidateRow(candidate));
+
+    if (candidate.id === expandedCandidateId) {
+      tableBody.append(createCandidateDetailRow(candidate));
+    }
   });
 
   updateSelectionState();
@@ -262,7 +262,8 @@ function createCandidateRow(candidate) {
   const titleCell = document.createElement("td");
   const titleButton = createElement("button", "candidate-title-button", candidate.title);
   titleButton.type = "button";
-  titleButton.addEventListener("click", () => showCandidateDetail(candidate));
+  titleButton.setAttribute("aria-expanded", String(candidate.id === expandedCandidateId));
+  titleButton.addEventListener("click", () => toggleCandidateDetail(candidate.id));
 
   const summary = createElement(
     "p",
@@ -307,6 +308,72 @@ function createCandidateRow(candidate) {
   );
 
   return row;
+}
+
+function createCandidateDetailRow(candidate) {
+  const row = document.createElement("tr");
+  row.className = "candidate-detail-row";
+  row.dataset.detailFor = candidate.id;
+
+  const cell = document.createElement("td");
+  cell.colSpan = 6;
+
+  const panel = createElement("div", "candidate-inline-detail");
+  const header = createElement("div", "candidate-inline-header");
+  const heading = document.createElement("div");
+  heading.append(
+    createElement("p", "results-label", "DETAIL"),
+    createElement("h3", null, candidate.title),
+  );
+
+  const closeButton = createElement("button", "admin-icon-button", "×");
+  closeButton.type = "button";
+  closeButton.setAttribute("aria-label", "상세 닫기");
+  closeButton.addEventListener("click", () => toggleCandidateDetail(candidate.id));
+
+  header.append(heading, closeButton);
+  panel.append(header, createCandidateDetailList(candidate));
+  cell.append(panel);
+  row.append(cell);
+
+  return row;
+}
+
+function createCandidateDetailList(candidate) {
+  const detailList = createElement("dl", "candidate-detail-list");
+  const rows = [
+    ["상태", statusLabels[candidate.candidate_status] || candidate.candidate_status],
+    ["Source", getSourceName(candidate)],
+    ["카테고리", getCategoryName(candidate)],
+    ["주최", candidate.organizer || "확인 필요"],
+    ["대상", candidate.target_audience || "확인 필요"],
+    ["신청 시작", formatDate(candidate.application_start_at)],
+    ["신청 마감", formatDate(candidate.application_deadline_at)],
+    ["원문", candidate.official_url || "확인 필요"],
+    [
+      "검증 오류",
+      (candidate.validation_errors || []).length
+        ? candidate.validation_errors.join(", ")
+        : "없음",
+    ],
+    ["요약", candidate.summary || "요약 정보가 없습니다."],
+  ];
+
+  rows.forEach(([label, value]) => {
+    const wrapper = document.createElement("div");
+    wrapper.append(
+      createElement("dt", null, label),
+      createElement("dd", null, value),
+    );
+    detailList.append(wrapper);
+  });
+
+  return detailList;
+}
+
+function toggleCandidateDetail(candidateId) {
+  expandedCandidateId = expandedCandidateId === candidateId ? null : candidateId;
+  renderCandidates();
 }
 
 function createCandidateActions(candidate) {
@@ -361,47 +428,6 @@ function updateSelectionState() {
     visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
   selectAll.indeterminate =
     selectedVisibleCount > 0 && selectedVisibleCount < visibleIds.length;
-}
-
-function showCandidateDetail(candidate) {
-  detailPanel.hidden = false;
-  detailTitle.textContent = candidate.title;
-  detailList.replaceChildren();
-
-  const rows = [
-    ["상태", statusLabels[candidate.candidate_status] || candidate.candidate_status],
-    ["Source", getSourceName(candidate)],
-    ["카테고리", getCategoryName(candidate)],
-    ["주최", candidate.organizer || "확인 필요"],
-    ["대상", candidate.target_audience || "확인 필요"],
-    ["신청 시작", formatDate(candidate.application_start_at)],
-    ["신청 마감", formatDate(candidate.application_deadline_at)],
-    ["원문", candidate.official_url || "확인 필요"],
-    [
-      "검증 오류",
-      (candidate.validation_errors || []).length
-        ? candidate.validation_errors.join(", ")
-        : "없음",
-    ],
-    ["요약", candidate.summary || "요약 정보가 없습니다."],
-  ];
-
-  rows.forEach(([label, value]) => {
-    const wrapper = document.createElement("div");
-    wrapper.append(
-      createElement("dt", null, label),
-      createElement("dd", null, value),
-    );
-    detailList.append(wrapper);
-  });
-
-  detailRaw.textContent = JSON.stringify(
-    candidate.raw_payload || {
-      message: "목록 성능을 위해 raw payload는 목록 응답에서 제외했습니다.",
-    },
-    null,
-    2,
-  );
 }
 
 async function applyAction(action, candidateIds) {
@@ -477,8 +503,4 @@ document.querySelectorAll("[data-bulk-action]").forEach((button) => {
   button.addEventListener("click", () => {
     applyAction(button.dataset.bulkAction, Array.from(selectedIds));
   });
-});
-
-detailClose.addEventListener("click", () => {
-  detailPanel.hidden = true;
 });

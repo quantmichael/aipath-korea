@@ -15,9 +15,11 @@ class DaconAdapter(HtmlSourceAdapter):
         "/competitions",
     )
 
+    def accepts(self, *, title: str, url: str) -> bool:
+        return "참가신청중" in title and super().accepts(title=title, url=url)
+
     def clean_title(self, title: str) -> str:
         cleaned = super().clean_title(title)
         cleaned = re.split(r"\s+\|\s+", cleaned, maxsplit=1)[0]
         cleaned = re.sub(r"\s+참가신청중\s+[0-9,]+명.*$", "", cleaned)
         return cleaned.strip()
-

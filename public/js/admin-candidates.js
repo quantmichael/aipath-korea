@@ -171,8 +171,8 @@ function populateFilters() {
     categoryFilter.append(option);
   });
 
-  sourceFilter.value = Array.from(sources).has(currentSource) ? currentSource : "";
-  categoryFilter.value = Array.from(categories).has(currentCategory)
+  sourceFilter.value = sources.has(currentSource) ? currentSource : "";
+  categoryFilter.value = categories.has(currentCategory)
     ? currentCategory
     : "";
 }

@@ -76,6 +76,42 @@ function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function formatSummary(value) {
+  const rawSummary = String(value || "").trim();
+  if (!rawSummary) {
+    return "요약 정보가 없습니다.";
+  }
+
+  const lineNormalized = rawSummary
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+/g, " ");
+  const existingLines = lineNormalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (existingLines.length > 1) {
+    return existingLines.slice(0, 6).join("\n");
+  }
+
+  const normalized = existingLines[0] || lineNormalized.replace(/\s+/g, " ").trim();
+  const sentences = normalized
+    .split(/(?<=[.!?。])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+  if (sentences.length > 1) {
+    return sentences.slice(0, 4).join("\n");
+  }
+
+  return normalized
+    .split(/\s+(?=또한|특히|본 대회는|최근|아래와 같이|이를 통해|참가자는|본 컨퍼런스는)/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .join("\n");
+}
+
 function getSourceName(candidate) {
   return candidate.sources?.name || "출처 확인";
 }
@@ -268,7 +304,7 @@ function createCandidateRow(candidate) {
   const summary = createElement(
     "p",
     "candidate-summary",
-    candidate.summary || "요약 정보가 없습니다.",
+    formatSummary(candidate.summary),
   );
   const meta = createElement(
     "p",
@@ -356,7 +392,7 @@ function createCandidateDetailList(candidate) {
         ? candidate.validation_errors.join(", ")
         : "없음",
     ],
-    ["요약", candidate.summary || "요약 정보가 없습니다."],
+    ["요약", formatSummary(candidate.summary)],
   ];
 
   rows.forEach(([label, value]) => {

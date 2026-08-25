@@ -38,11 +38,25 @@ class TextExtractor(HTMLParser):
         super().__init__()
         self.parts: list[str] = []
 
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if tag in {"br", "p", "div", "li"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"p", "div", "li"}:
+            self.parts.append("\n")
+
     def handle_data(self, data: str) -> None:
         self.parts.append(data)
 
     def text(self) -> str:
-        return " ".join(" ".join(self.parts).split())
+        raw_text = "".join(self.parts)
+        lines = [" ".join(line.split()) for line in raw_text.splitlines()]
+        return "\n".join(line for line in lines if line)
 
 
 def collect_api_source(
@@ -283,7 +297,37 @@ def _clean_html_text(value: str | None) -> str | None:
     parser = TextExtractor()
     parser.feed(unescape(value))
     text = parser.text()
-    return text or None
+    return _format_bizinfo_summary_text(text) if text else None
+
+
+def _format_bizinfo_summary_text(value: str) -> str:
+    normalized = re.sub(r"[ \t]+", " ", value).strip()
+    normalized = re.sub(r"\s*☞\s*", "\n☞ ", normalized)
+    normalized = re.sub(r"\s+-\s+", "\n- ", normalized)
+
+    lines: list[str] = []
+    for raw_line in normalized.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if line.startswith(("☞", "-")):
+            lines.append(line)
+            continue
+
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?。])\s+", line)
+            if sentence.strip()
+        ]
+        lines.extend(sentences or [line])
+
+    deduplicated: list[str] = []
+    for line in lines:
+        if line not in deduplicated:
+            deduplicated.append(line)
+
+    return "\n".join(deduplicated[:6])[:900]
 
 
 def _first_iso_date(row: dict[str, Any], keys: tuple[str, ...]) -> str | None:

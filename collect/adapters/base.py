@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+from collect.models import OpportunityCandidate
+
 
 AI_KEYWORDS = (
     " ai ",
@@ -102,6 +104,14 @@ class HtmlSourceAdapter:
     def clean_title(self, title: str) -> str:
         return " ".join(title.split())
 
+    def enrich_candidate(
+        self,
+        candidate: OpportunityCandidate,
+        *,
+        timeout: int = 15,
+    ) -> OpportunityCandidate:
+        return candidate
+
     def is_detail_url(self, url: str) -> bool:
         normalized_url = url.lower()
 
@@ -147,4 +157,3 @@ class HtmlSourceAdapter:
             keyword.lower() in haystack for keyword in OPPORTUNITY_KEYWORDS
         )
         return has_ai_signal and has_opportunity_signal
-

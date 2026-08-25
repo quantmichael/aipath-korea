@@ -95,20 +95,24 @@ def collect_html_source(
 
         cleaned_title = adapter.clean_title(title)
         seen_urls.add(official_url)
+        candidate = OpportunityCandidate(
+            source_id=source.id,
+            external_id=official_url,
+            title=cleaned_title[:300],
+            official_url=official_url,
+            candidate_status="pending",
+            raw_payload={
+                "collector": "html",
+                "source_name": source.name,
+                "collection_url": source.collection_url,
+                "anchor_text": title,
+                "href": link["href"],
+            },
+        )
         candidates.append(
-            OpportunityCandidate(
-                source_id=source.id,
-                external_id=official_url,
-                title=cleaned_title[:300],
-                official_url=official_url,
-                candidate_status="pending",
-                raw_payload={
-                    "collector": "html",
-                    "source_name": source.name,
-                    "collection_url": source.collection_url,
-                    "anchor_text": title,
-                    "href": link["href"],
-                },
+            adapter.enrich_candidate(
+                candidate,
+                timeout=timeout,
             )
         )
 

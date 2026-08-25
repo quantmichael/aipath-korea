@@ -832,11 +832,17 @@ a {
   justify-content: space-between;
 }
 
-.admin-actions,
-.candidate-row-actions {
+.admin-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.candidate-row-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, max-content));
+  gap: 8px;
+  align-items: start;
 }
 
 .admin-action-button,
@@ -892,9 +898,30 @@ a {
 
 .candidate-table {
   width: 100%;
-  min-width: 960px;
+  min-width: 1040px;
   border-collapse: collapse;
   background: #fff;
+}
+
+.candidate-table th:nth-child(3),
+.candidate-table td:nth-child(3) {
+  width: 110px;
+  white-space: nowrap;
+}
+
+.candidate-table th:nth-child(4),
+.candidate-table td:nth-child(4) {
+  width: 112px;
+}
+
+.candidate-table th:nth-child(5),
+.candidate-table td:nth-child(5) {
+  width: 120px;
+}
+
+.candidate-table th:nth-child(6),
+.candidate-table td:nth-child(6) {
+  width: 168px;
 }
 
 .candidate-table th,

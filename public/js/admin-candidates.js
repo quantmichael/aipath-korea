@@ -294,12 +294,7 @@ function createCandidateRow(candidate) {
 
   const actionCell = document.createElement("td");
   const actionWrap = createElement("div", "candidate-row-actions");
-  actionWrap.append(
-    createRowAction("원문", () => window.open(candidate.official_url, "_blank", "noopener")),
-    createRowAction("보류", () => applyAction("hold", [candidate.id])),
-    createRowAction("제외", () => applyAction("reject", [candidate.id]), "danger"),
-    createRowAction("공개", () => applyAction("publish", [candidate.id]), "primary"),
-  );
+  actionWrap.append(...createCandidateActions(candidate));
   actionCell.append(actionWrap);
 
   row.append(
@@ -312,6 +307,38 @@ function createCandidateRow(candidate) {
   );
 
   return row;
+}
+
+function createCandidateActions(candidate) {
+  const openOriginal = createRowAction("원문", () => {
+    window.open(candidate.official_url, "_blank", "noopener");
+  });
+
+  if (candidate.candidate_status === "promoted") {
+    return [openOriginal];
+  }
+
+  if (candidate.candidate_status === "rejected") {
+    return [
+      openOriginal,
+      createRowAction("검수 가능", () => applyAction("verify", [candidate.id])),
+    ];
+  }
+
+  if (candidate.candidate_status === "needs_review") {
+    return [
+      openOriginal,
+      createRowAction("검수 가능", () => applyAction("verify", [candidate.id])),
+      createRowAction("제외", () => applyAction("reject", [candidate.id]), "danger"),
+    ];
+  }
+
+  return [
+    openOriginal,
+    createRowAction("보류", () => applyAction("hold", [candidate.id])),
+    createRowAction("제외", () => applyAction("reject", [candidate.id]), "danger"),
+    createRowAction("공개", () => applyAction("publish", [candidate.id]), "primary"),
+  ];
 }
 
 function createRowAction(label, onClick, tone) {

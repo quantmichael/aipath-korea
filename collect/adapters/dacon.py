@@ -66,9 +66,15 @@ class DaconAdapter(HtmlSourceAdapter):
 
         candidate.summary = candidate.summary or _extract_summary(lines)
         candidate.target_audience = (
-            candidate.target_audience or _extract_after_heading(lines, "[참가 자격]")
+            candidate.target_audience
+            or _extract_after_heading(lines, "[참가 자격]")
+            or _extract_conference_audience(lines)
         )
-        candidate.organizer = candidate.organizer or _extract_organizer(lines)
+        candidate.organizer = (
+            candidate.organizer
+            or _extract_organizer(lines)
+            or _extract_subtitle_organizer(lines, candidate.title)
+        )
 
         schedule = _extract_schedule(lines)
         candidate.application_start_at = (
@@ -79,6 +85,9 @@ class DaconAdapter(HtmlSourceAdapter):
             or schedule.get("application_deadline_at")
         )
         candidate.event_start_at = candidate.event_start_at or schedule.get("event_start_at")
+        candidate.event_start_at = (
+            candidate.event_start_at or _extract_conference_event_start(lines)
+        )
         candidate.event_end_at = candidate.event_end_at or schedule.get("event_end_at")
 
         candidate.raw_payload["detail_collector"] = "dacon_detail"
@@ -108,8 +117,9 @@ def _fetch_detail_lines(url: str, *, timeout: int) -> list[str]:
 def _extract_summary(lines: list[str]) -> str | None:
     topic = _extract_after_heading(lines, "[주제]")
     background = _extract_section(lines, "[배경]", stop_headings=("[대회 방식]",))
+    conference_intro = _extract_intro_before_heading(lines, "[컨퍼런스 개요]")
 
-    summary_parts = [value for value in (topic, background) if value]
+    summary_parts = [value for value in (topic, background, conference_intro) if value]
     if not summary_parts:
         return None
 
@@ -172,6 +182,80 @@ def _extract_organizer(lines: list[str]) -> str | None:
     return " / ".join(values) or None
 
 
+def _extract_subtitle_organizer(
+    lines: list[str],
+    title: str | None,
+) -> str | None:
+    if not title:
+        return None
+
+    title_index = _find_heading_index(lines, title)
+    if title_index is None:
+        return None
+
+    for line in lines[title_index + 1 : title_index + 6]:
+        if "|" not in line:
+            continue
+
+        organizer = line.split("|", maxsplit=1)[0].strip()
+        return organizer or None
+
+    return None
+
+
+def _extract_conference_audience(lines: list[str]) -> str | None:
+    for line in lines:
+        if "참석대상" not in line:
+            continue
+
+        return _value_after_dash_or_colon(line)
+
+    return None
+
+
+def _extract_intro_before_heading(lines: list[str], heading: str) -> str | None:
+    heading_index = _find_heading_index(lines, heading)
+    if heading_index is None:
+        return None
+
+    values: list[str] = []
+    intro_lines = lines[max(0, heading_index - 6) : heading_index]
+    for index, line in enumerate(intro_lines):
+        if _is_noise_line(line):
+            continue
+
+        if line.startswith(("#", "[", "##")):
+            continue
+
+        if "|" in line:
+            continue
+
+        next_line = intro_lines[index + 1] if index + 1 < len(intro_lines) else ""
+        if "|" in next_line:
+            continue
+
+        values.append(line)
+
+    return " ".join(values[-3:]).strip() or None
+
+
+def _extract_conference_event_start(lines: list[str]) -> str | None:
+    year = datetime.now(timezone.utc).year
+
+    for line in lines:
+        if "일시" not in line:
+            continue
+
+        match = re.search(r"(\d{1,2})월\s*(\d{1,2})일", line)
+        if not match:
+            continue
+
+        month, day = match.groups()
+        return f"{year}-{int(month):02d}-{int(day):02d}"
+
+    return None
+
+
 def _extract_schedule(lines: list[str]) -> dict[str, str]:
     values: dict[str, str] = {}
     year = datetime.now(timezone.utc).year
@@ -189,7 +273,7 @@ def _extract_schedule(lines: list[str]) -> dict[str, str]:
             values["application_start_at"] = date_value
         elif "대회 시작" in label:
             values["event_start_at"] = date_value
-        elif "리더보드 제출 마감" in label:
+        elif "참가 신청 마감" in label or "리더보드 제출 마감" in label:
             values.setdefault("application_deadline_at", date_value)
         elif "대회 종료" in label:
             values["event_end_at"] = date_value
@@ -213,6 +297,14 @@ def _find_heading_index(lines: list[str], heading: str) -> int | None:
             return index
 
     return None
+
+
+def _value_after_dash_or_colon(line: str) -> str | None:
+    parts = re.split(r"\s[-:]\s|:", line, maxsplit=1)
+    if len(parts) < 2:
+        return None
+
+    return parts[1].strip() or None
 
 
 def _next_non_noise_line(lines: list[str], start_index: int) -> str | None:

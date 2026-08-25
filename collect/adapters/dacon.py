@@ -123,7 +123,7 @@ def _extract_summary(lines: list[str]) -> str | None:
     if not summary_parts:
         return None
 
-    return " ".join(summary_parts)[:1000]
+    return "\n\n".join(summary_parts)[:1000]
 
 
 def _extract_section(
@@ -146,7 +146,7 @@ def _extract_section(
 
         values.append(line)
 
-    return " ".join(values).strip() or None
+    return "\n".join(values).strip() or None
 
 
 def _extract_after_heading(lines: list[str], heading: str) -> str | None:
@@ -236,7 +236,7 @@ def _extract_intro_before_heading(lines: list[str], heading: str) -> str | None:
 
         values.append(line)
 
-    return " ".join(values[-3:]).strip() or None
+    return "\n".join(values[-3:]).strip() or None
 
 
 def _extract_conference_event_start(lines: list[str]) -> str | None:

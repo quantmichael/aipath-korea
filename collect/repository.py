@@ -27,6 +27,7 @@ def fetch_active_sources(
     *,
     limit: int,
     method: str | None = None,
+    source_id: str | None = None,
 ) -> list[Source]:
     query = (
         supabase.table("sources")
@@ -49,6 +50,9 @@ def fetch_active_sources(
 
     if method:
         query = query.eq("collection_method", method)
+
+    if source_id:
+        query = query.eq("id", source_id)
 
     rows = query.execute().data or []
 

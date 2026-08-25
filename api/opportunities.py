@@ -399,6 +399,7 @@ def run_collect_endpoint(
     max_sources: int | None = None,
     max_candidates: int | None = None,
     method: str | None = None,
+    source_id: str | None = None,
 ) -> dict:
     verify_collect_request(
         request=request,
@@ -411,6 +412,7 @@ def run_collect_endpoint(
             max_sources=max_sources or limit,
             max_candidates_per_source=max_candidates,
             method=method,
+            source_id=source_id,
         )
     except RuntimeError as error:
         raise HTTPException(

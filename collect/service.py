@@ -26,6 +26,7 @@ def run_collection(
     max_sources: int | None = None,
     max_candidates_per_source: int | None = None,
     method: str | None = None,
+    source_id: str | None = None,
 ) -> CollectionResult:
     supabase = create_supabase_client()
     max_sources = max_sources or int(os.environ.get("MAX_SOURCES_PER_RUN", "3"))
@@ -35,8 +36,9 @@ def run_collection(
 
     sources = fetch_active_sources(
         supabase,
-        limit=max_sources,
+        limit=1 if source_id else max_sources,
         method=method,
+        source_id=source_id,
     )
     category_map = fetch_category_map(supabase)
     result = CollectionResult()

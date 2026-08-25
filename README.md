@@ -204,6 +204,8 @@ Collect는 Source 기반 수집부터 시작합니다. Vercel Cron은 하루 2�
 
 수집 방식은 소스별로 나눕니다. 기업마당은 공식 API(`BIZINFO_API_KEY`)를 사용하고, AI Hub, NIPA, DACON처럼 RSS/API가 확인되지 않은 소스는 HTML 수집기와 source adapter를 통해 목록/상세 URL을 검증합니다. 테스트 실행 시 `limit=1` 또는 `max_sources=1`로 source 개수를 제한할 수 있습니다.
 
+후보 검수는 `/admin/candidates`에서 진행합니다. 화면에서 `COLLECT_SECRET` 또는 `CRON_SECRET`을 입력하면 후보 목록을 불러오고, 후보를 보류, 제외, 검수 가능, 공개 상태로 처리할 수 있습니다. 공개 액션은 후보를 `opportunities`에 반영하고 `status = 'open'`으로 전환합니다.
+
 수집 결과는 검증 전 공개 테이블에 바로 저장하지 않고 `opportunity_candidates`에 후보로 저장합니다. 기존 `opportunities` 화면과 AI 추천은 `draft`, `cancelled`를 제외한 검증 데이터만 읽으므로 수집 실패나 미검증 후보가 사용자 화면에 바로 노출되지 않습니다.
 
 로컬에서 같은 수집 엔진을 테스트할 수 있습니다.

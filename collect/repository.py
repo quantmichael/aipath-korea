@@ -235,6 +235,92 @@ def fetch_promotable_candidates(
     return query.execute().data or []
 
 
+def fetch_candidate_review_rows(
+    supabase: Client,
+    *,
+    limit: int = 100,
+    candidate_status: str | None = None,
+    source_id: str | None = None,
+) -> list[dict[str, Any]]:
+    query = (
+        supabase.table("opportunity_candidates")
+        .select(
+            """
+            id,
+            source_id,
+            category_id,
+            title,
+            slug,
+            summary,
+            organizer,
+            target_audience,
+            application_start_at,
+            application_deadline_at,
+            official_url,
+            candidate_status,
+            validation_errors,
+            raw_payload,
+            discovered_at,
+            created_at,
+            updated_at,
+            sources (
+                name
+            ),
+            categories (
+                name,
+                slug
+            )
+            """
+        )
+        .order("created_at", desc=True)
+        .limit(min(max(limit, 1), 200))
+    )
+
+    if candidate_status:
+        query = query.eq("candidate_status", candidate_status)
+
+    if source_id:
+        query = query.eq("source_id", source_id)
+
+    return query.execute().data or []
+
+
+def fetch_candidates_by_ids(
+    supabase: Client,
+    candidate_ids: list[str],
+) -> list[dict[str, Any]]:
+    if not candidate_ids:
+        return []
+
+    return (
+        supabase.table("opportunity_candidates")
+        .select("*")
+        .in_("id", candidate_ids)
+        .execute()
+        .data
+        or []
+    )
+
+
+def update_candidate_statuses(
+    supabase: Client,
+    candidate_ids: list[str],
+    *,
+    candidate_status: str,
+) -> int:
+    if not candidate_ids:
+        return 0
+
+    response = (
+        supabase.table("opportunity_candidates")
+        .update({"candidate_status": candidate_status})
+        .in_("id", candidate_ids)
+        .execute()
+    )
+
+    return len(response.data or [])
+
+
 def find_existing_opportunity_for_record(
     supabase: Client,
     record: dict[str, Any],
@@ -268,6 +354,19 @@ def upsert_draft_opportunity(
     response = supabase.table("opportunities").insert(record).execute()
     data = response.data or []
     return (data[0]["id"] if data else "", "inserted")
+
+
+def publish_opportunity(
+    supabase: Client,
+    opportunity_id: str,
+) -> None:
+    supabase.table("opportunities").update(
+        {
+            "status": "open",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("id", opportunity_id).execute()
 
 
 def mark_candidate_promoted(

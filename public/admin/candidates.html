@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta
+      name="description"
+      content="AI PATH KOREA 후보 기회 검수 화면"
+    >
+
+    <title>후보 검수 | AI PATH KOREA</title>
+
+    <link rel="stylesheet" href="../css/style.css">
+  </head>
+
+  <body>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="logo" href="/" aria-label="AIPATH 홈">
+          <picture class="logo-picture">
+            <source srcset="../images/aipath-logo.webp" type="image/webp">
+            <img
+              class="logo-image"
+              src="../images/aipath-logo.png"
+              width="900"
+              height="231"
+              alt="AIPATH"
+            >
+          </picture>
+        </a>
+
+        <nav class="main-navigation" aria-label="관리 메뉴">
+          <a class="active" href="./candidates.html">후보 검수</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="admin-page">
+      <section class="page-heading">
+        <p class="eyebrow">COLLECT REVIEW</p>
+        <h1>수집된 후보를 검수하고 공개하세요.</h1>
+        <p>
+          자동 수집된 후보를 확인한 뒤 보류, 제외, 공개 처리를 합니다.
+          공개된 항목은 기회 탐색 페이지에 노출됩니다.
+        </p>
+      </section>
+
+      <section class="admin-auth-panel" id="auth-panel">
+        <div>
+          <h2>관리자 키</h2>
+          <p>Collect secret을 입력하면 후보 목록을 불러옵니다.</p>
+        </div>
+
+        <form id="secret-form" class="admin-secret-form">
+          <label for="secret-input">Secret</label>
+          <input
+            id="secret-input"
+            type="password"
+            autocomplete="current-password"
+            placeholder="COLLECT_SECRET 또는 CRON_SECRET"
+          >
+          <button class="button button-primary" type="submit">불러오기</button>
+        </form>
+      </section>
+
+      <section class="admin-dashboard" aria-label="후보 상태 요약">
+        <div class="admin-metric">
+          <span>전체</span>
+          <strong id="metric-total">0</strong>
+        </div>
+        <div class="admin-metric">
+          <span>검수 가능</span>
+          <strong id="metric-verified">0</strong>
+        </div>
+        <div class="admin-metric">
+          <span>보류</span>
+          <strong id="metric-review">0</strong>
+        </div>
+        <div class="admin-metric">
+          <span>제외</span>
+          <strong id="metric-rejected">0</strong>
+        </div>
+        <div class="admin-metric">
+          <span>공개 완료</span>
+          <strong id="metric-promoted">0</strong>
+        </div>
+      </section>
+
+      <section class="filter-panel admin-filter-panel" aria-label="후보 필터">
+        <div class="search-field">
+          <label for="candidate-search">검색</label>
+          <input
+            id="candidate-search"
+            type="search"
+            placeholder="제목, 요약, 출처 검색"
+          >
+        </div>
+
+        <div class="filter-fields admin-filter-fields">
+          <div class="filter-field">
+            <label for="status-filter">후보 상태</label>
+            <select id="status-filter">
+              <option value="">전체</option>
+              <option value="verified">검수 가능</option>
+              <option value="needs_review">보류</option>
+              <option value="pending">대기</option>
+              <option value="rejected">제외</option>
+              <option value="promoted">공개 완료</option>
+              <option value="duplicate">중복</option>
+            </select>
+          </div>
+
+          <div class="filter-field">
+            <label for="source-filter">Source</label>
+            <select id="source-filter">
+              <option value="">전체</option>
+            </select>
+          </div>
+
+          <div class="filter-field">
+            <label for="category-filter">카테고리</label>
+            <select id="category-filter">
+              <option value="">전체</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="admin-review-section" aria-live="polite">
+        <div class="admin-toolbar">
+          <div>
+            <p class="results-label">REVIEW QUEUE</p>
+            <h2>후보 목록</h2>
+          </div>
+
+          <div class="admin-actions" aria-label="일괄 처리">
+            <button class="admin-action-button" data-bulk-action="verify" type="button">
+              검수 가능
+            </button>
+            <button class="admin-action-button" data-bulk-action="hold" type="button">
+              보류
+            </button>
+            <button class="admin-action-button admin-danger" data-bulk-action="reject" type="button">
+              제외
+            </button>
+            <button class="admin-action-button admin-primary" data-bulk-action="publish" type="button">
+              선택 공개
+            </button>
+          </div>
+        </div>
+
+        <p class="admin-selection" id="selection-count">선택된 후보 0개</p>
+
+        <div class="candidate-table-wrap">
+          <table class="candidate-table">
+            <thead>
+              <tr>
+                <th scope="col">
+                  <input id="select-all" type="checkbox" aria-label="전체 선택">
+                </th>
+                <th scope="col">후보</th>
+                <th scope="col">Source</th>
+                <th scope="col">상태</th>
+                <th scope="col">마감</th>
+                <th scope="col">액션</th>
+              </tr>
+            </thead>
+            <tbody id="candidate-table-body">
+              <tr>
+                <td colspan="6" class="admin-empty-cell">
+                  관리자 키를 입력하면 후보를 불러옵니다.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside class="candidate-detail-panel" id="detail-panel" hidden>
+        <div class="candidate-detail-header">
+          <div>
+            <p class="results-label">DETAIL</p>
+            <h2 id="detail-title">후보 상세</h2>
+          </div>
+          <button id="detail-close" class="admin-icon-button" type="button" aria-label="상세 닫기">
+            ×
+          </button>
+        </div>
+
+        <dl class="candidate-detail-list" id="detail-list"></dl>
+
+        <pre class="candidate-raw" id="detail-raw"></pre>
+      </aside>
+    </main>
+
+    <script src="../js/admin-candidates.js"></script>
+  </body>
+</html>

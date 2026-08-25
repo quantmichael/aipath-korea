@@ -27,6 +27,14 @@
     {
       "source": "/card/",
       "destination": "/card/index.html"
+    },
+    {
+      "source": "/admin/candidates",
+      "destination": "/admin/candidates.html"
+    },
+    {
+      "source": "/admin/candidates/",
+      "destination": "/admin/candidates.html"
     }
   ]
 }

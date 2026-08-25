@@ -9,6 +9,7 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
 
+from collect.admin import apply_candidate_action, list_review_candidates
 from collect.promote import promote_candidates
 from collect.service import run_collection
 
@@ -55,6 +56,11 @@ class AIRecommendation(BaseModel):
 
 class AIRecommendationResult(BaseModel):
     recommendations: list[AIRecommendation] = Field(max_length=3)
+
+
+class CandidateActionRequest(BaseModel):
+    candidate_ids: list[str] = Field(min_length=1, max_length=100)
+    action: Literal["publish", "reject", "hold", "verify"]
 
 def create_supabase_client() -> Client:
     supabase_url = os.environ.get("SUPABASE_URL")
@@ -453,6 +459,71 @@ def promote_collect_candidates_endpoint(
         ) from error
 
     return result.to_dict()
+
+
+@app.get("/api/collect/candidates")
+def list_collect_candidates_endpoint(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_collect_secret: str | None = Header(default=None),
+    limit: int = 100,
+    candidate_status: str | None = None,
+    source_id: str | None = None,
+) -> dict:
+    verify_collect_request(
+        request=request,
+        authorization=authorization,
+        x_collect_secret=x_collect_secret,
+    )
+
+    try:
+        return list_review_candidates(
+            limit=limit,
+            candidate_status=candidate_status,
+            source_id=source_id,
+        )
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        ) from error
+    except Exception as error:
+        print(f"Candidate listing failed: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="후보 목록을 불러오지 못했습니다.",
+        ) from error
+
+
+@app.post("/api/collect/candidates/action")
+def apply_collect_candidate_action_endpoint(
+    payload: CandidateActionRequest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_collect_secret: str | None = Header(default=None),
+) -> dict:
+    verify_collect_request(
+        request=request,
+        authorization=authorization,
+        x_collect_secret=x_collect_secret,
+    )
+
+    try:
+        return apply_candidate_action(
+            candidate_ids=payload.candidate_ids,
+            action=payload.action,
+        )
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        ) from error
+    except Exception as error:
+        print(f"Candidate action failed: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="후보 상태를 변경하지 못했습니다.",
+        ) from error
 
 
 def verify_collect_request(

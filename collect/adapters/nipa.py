@@ -62,7 +62,9 @@ class NipaAdapter(HtmlSourceAdapter):
             _extract_application_period(text)
         )
         candidate.organizer = candidate.organizer or _extract_organizer(text)
-        candidate.summary = candidate.summary or _extract_summary(text)
+        detail_summary = _extract_summary(text)
+        if _is_missing_summary(candidate.summary):
+            candidate.summary = detail_summary
         candidate.raw_payload["detail_collector"] = "nipa_detail"
         return candidate
 
@@ -126,3 +128,11 @@ def _extract_summary(text: str) -> str | None:
     summary = re.sub(r"\s+(?=[-•]\s*)", "\n", summary)
     summary = re.sub(r"\s+(?=\d{4}\.\s*\d{1,2}\.\s*\d{1,2})", "\n", summary)
     return summary[:900] or None
+
+
+def _is_missing_summary(value: str | None) -> bool:
+    if not value:
+        return True
+
+    normalized = re.sub(r"\s+", "", value).lower()
+    return normalized in {"요약정보가없습니다.", "요약정보가없습니다"}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import date, datetime, timedelta, timezone
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
@@ -116,6 +117,9 @@ def collect_bizinfo_api_source(
 
         candidate = _candidate_from_bizinfo_row(source, row)
         if not candidate:
+            continue
+
+        if _is_expired_candidate(candidate):
             continue
 
         external_id = candidate.external_id or candidate.official_url
@@ -328,6 +332,30 @@ def _format_bizinfo_summary_text(value: str) -> str:
             deduplicated.append(line)
 
     return "\n".join(deduplicated[:6])[:900]
+
+
+def _is_expired_candidate(candidate: OpportunityCandidate) -> bool:
+    deadline = _date_from_candidate_value(candidate.application_deadline_at)
+    if not deadline:
+        return False
+
+    return deadline < _today_kst()
+
+
+def _date_from_candidate_value(value: str | None) -> date | None:
+    if not value:
+        return None
+
+    match = re.search(r"(\d{4})-(\d{2})-(\d{2})", value)
+    if not match:
+        return None
+
+    year, month, day = match.groups()
+    return date(int(year), int(month), int(day))
+
+
+def _today_kst() -> date:
+    return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=9))).date()
 
 
 def _first_iso_date(row: dict[str, Any], keys: tuple[str, ...]) -> str | None:

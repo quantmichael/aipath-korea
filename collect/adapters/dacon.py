@@ -189,15 +189,34 @@ def _extract_organizer(lines: list[str]) -> str | None:
     if start_index is None:
         return None
 
-    values: list[str] = []
+    values_by_label: dict[str, list[str]] = {
+        "주최": [],
+        "주관": [],
+        "운영": [],
+    }
     for line in lines[start_index + 1 : start_index + 8]:
         if "대회 주요 일정" in line:
             break
 
-        if line.startswith(("주최:", "주관:", "운영:")):
-            values.append(line)
+        match = re.match(r"^(주최|주관|운영):\s*(.*)$", line)
+        if not match:
+            continue
 
-    return " / ".join(values) or None
+        label, value = match.groups()
+        if value.strip():
+            values_by_label[label].append(value.strip())
+
+    primary_values = values_by_label["주최"] + values_by_label["주관"]
+    if primary_values:
+        return _dedupe_join(primary_values)
+
+    operation_values = [
+        value for value in values_by_label["운영"] if value not in {"데이콘", "DACON"}
+    ]
+    if operation_values:
+        return _dedupe_join(operation_values)
+
+    return _dedupe_join(values_by_label["운영"]) or None
 
 
 def _extract_subtitle_organizer(
@@ -333,6 +352,16 @@ def _value_after_dash_or_colon(line: str) -> str | None:
         return None
 
     return parts[1].strip() or None
+
+
+def _dedupe_join(values: list[str]) -> str | None:
+    deduped: list[str] = []
+    for value in values:
+        normalized = value.strip()
+        if normalized and normalized not in deduped:
+            deduped.append(normalized)
+
+    return " / ".join(deduped) or None
 
 
 def _compact_summary_lines(values: list[str]) -> list[str]:

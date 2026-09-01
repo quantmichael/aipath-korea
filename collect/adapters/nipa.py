@@ -141,7 +141,7 @@ def _extract_summary(text: str) -> str | None:
             lines.append(line)
             continue
 
-        sentences = re.split(r"(?<=[.!?。])\s+", line)
+        sentences = re.split(r"(?<=[.!?。])\s+(?=[가-힣A-Za-z])", line)
         lines.extend(sentence.strip() for sentence in sentences if sentence.strip())
 
     return "\n".join(lines[:8])[:900] or None

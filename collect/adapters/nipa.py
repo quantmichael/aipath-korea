@@ -130,7 +130,21 @@ def _extract_summary(text: str) -> str | None:
     summary = re.sub(r"\s+", " ", match.group(1)).strip(" |:")
     summary = re.sub(r"\s+(?=[-•]\s*)", "\n", summary)
     summary = re.sub(r"\s+(?=\d{4}\.\s*\d{1,2}\.\s*\d{1,2})", "\n", summary)
-    return summary[:900] or None
+
+    lines: list[str] = []
+    for line in summary.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        if line.startswith(("-", "•")):
+            lines.append(line)
+            continue
+
+        sentences = re.split(r"(?<=[.!?。])\s+", line)
+        lines.extend(sentence.strip() for sentence in sentences if sentence.strip())
+
+    return "\n".join(lines[:8])[:900] or None
 
 
 def _is_missing_summary(value: str | None) -> bool:

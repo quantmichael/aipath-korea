@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from collect.collectors.api import collect_api_source
 from collect.collectors.html import collect_html_source
@@ -75,6 +75,11 @@ def _run_source(
             source,
             max_candidates=max_candidates,
         )
+        candidates = [
+            candidate
+            for candidate in candidates
+            if not _is_expired_candidate(candidate.application_deadline_at)
+        ]
         summary.found_count = len(candidates)
 
         for candidate in candidates:
@@ -146,6 +151,25 @@ def _collect_candidates(
     # Manual/RSS/AI collectors are intentionally not faked. They can be
     # plugged into this dispatch table as each source is validated.
     return []
+
+
+def _is_expired_candidate(deadline: str | None) -> bool:
+    if not deadline:
+        return False
+
+    try:
+        deadline_date = datetime.fromisoformat(
+            deadline.replace("Z", "+00:00")
+        ).date()
+    except ValueError:
+        try:
+            deadline_date = date.fromisoformat(deadline[:10])
+        except ValueError:
+            return False
+
+    kst = timezone(timedelta(hours=9))
+    today = datetime.now(kst).date()
+    return deadline_date < today
 
 
 def _status_from_summary(summary: CollectionRunSummary) -> str:

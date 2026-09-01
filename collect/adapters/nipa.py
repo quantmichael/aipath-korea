@@ -120,11 +120,14 @@ def _extract_organizer(text: str) -> str | None:
 
 
 def _extract_summary(text: str) -> str | None:
-    match = re.search(r"내용\s*\|\s*(.+?)(?:첨부파일|목록|인쇄하기)", text)
+    match = re.search(
+        r"내용\s*(?:\|\s*|:\s*|)(.+?)(?:첨부파일|목록|인쇄하기)",
+        text,
+    )
     if not match:
         return None
 
-    summary = re.sub(r"\s+", " ", match.group(1)).strip()
+    summary = re.sub(r"\s+", " ", match.group(1)).strip(" |:")
     summary = re.sub(r"\s+(?=[-•]\s*)", "\n", summary)
     summary = re.sub(r"\s+(?=\d{4}\.\s*\d{1,2}\.\s*\d{1,2})", "\n", summary)
     return summary[:900] or None

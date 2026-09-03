@@ -1,8 +1,10 @@
 # Supabase
 
-`schema.sql`은 PostgreSQL 테이블, 관계, 인덱스, 날짜 검증, 자동 수정 시각 및 RLS 보안을 구성합니다.
+This directory contains the PostgreSQL database schema, seed data, and migrations used by AI PATH KOREA.
 
-예정 핵심 테이블:
+`schema.sql` configures the PostgreSQL tables, relationships, indexes, date validation, automatic update timestamps, and Row Level Security (RLS) policies.
+
+## Core Tables
 
 - `sources`
 - `categories`
@@ -12,15 +14,30 @@
 - `collection_runs`
 - `opportunity_candidates`
 
-## 적용 순서
+## Initial Setup
 
-1. Supabase SQL Editor에서 `schema.sql` 전체를 실행합니다.
-2. Table Editor에서 핵심 테이블 7개가 생성됐는지 확인합니다.
-3. `seed.sql`을 실행해 초기 카테고리와 태그를 입력합니다.
-4. `sample-opportunity.sql`로 실제 공식 출처, 첫 기회와 태그 관계를 검증합니다.
+1. Run the full `schema.sql` script in the Supabase SQL Editor.
+2. Verify that the seven core tables have been created in the Table Editor.
+3. Run `seed.sql` to insert the initial categories and tags.
+4. Run `sample-opportunity.sql` to verify an opportunity from an official source and its tag relationships.
 
-브라우저 역할인 `anon`과 `authenticated`에는 테이블 직접 접근 권한을 주지 않습니다. 서버의 Python API만 비밀 환경 변수를 통해 접근합니다.
+Direct table access is not granted to the browser-facing `anon` and `authenticated` roles.
 
-## 기존 DB에 Collect 적용
+Database access is handled through the server-side Python API using secure environment variables.
 
-이미 운영 중인 Supabase 프로젝트에는 `schema.sql`을 다시 실행하지 말고 `migrations/001_collect_sources.sql`을 먼저 실행합니다. 이후 `seed.sql`을 다시 실행하면 기존 Source에 `collection_url`, `source_type`, `collection_method` 기본값이 보강됩니다.
+## Applying the Collection System to an Existing Database
+
+For an existing production Supabase project, do not run `schema.sql` again.
+
+Instead:
+
+1. Run `migrations/001_collect_sources.sql`.
+2. Run `seed.sql` again.
+
+This updates existing source records with the default values required by the collection system, including:
+
+- `collection_url`
+- `source_type`
+- `collection_method`
+
+This migration approach allows the collection pipeline to be added without rebuilding the existing production database.

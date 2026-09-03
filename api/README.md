@@ -1,4 +1,12 @@
 # Python API
 
-Vercel Serverless Functions를 배치합니다. 공개 요청 검증, Supabase 조회, AI 추천을 서버에서 처리합니다.
+This directory contains the Vercel Serverless Functions used by AI PATH KOREA.
 
+The backend handles:
+
+- Public request validation
+- Supabase database queries
+- AI-powered opportunity recommendations
+- Server-side processing of sensitive operations
+
+Sensitive credentials and API keys are managed through server-side environment variables and are not exposed to the frontend.

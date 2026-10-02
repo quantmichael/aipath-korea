@@ -74,32 +74,32 @@ Candidates can then be reviewed and promoted to verified opportunities.
 
 ## Data Collection Workflow
 
-```text
-Official APIs / Web Sources
-          │
-          ▼
-    Source Adapters
-          │
-          ▼
-   Data Collection
-          │
-          ▼
- Opportunity Candidates
-          │
-          ▼
- Validation / Review
-          │
-          ▼
- Verified Opportunities
-          │
-          ├───────────────┐
-          ▼               ▼
- Search & Filtering    AI Recommendation
-          │               │
-          └───────┬───────┘
-                  ▼
-                Users
+```mermaid
+flowchart TD
+    A["Official APIs / Web Sources"]
+    B["Source Adapters"]
+    C["Data Collection"]
+    D["Opportunity Candidates"]
+    E["Validation / Review"]
+    F["Verified Opportunities"]
+    G["Search & Filtering"]
+    H["AI Recommendation"]
+    I["Users"]
+
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+    F --> H
+    G --> I
+    H --> I
 ```
+
+The collection pipeline separates raw collection results from publicly available opportunities.
+
+Newly discovered data is first stored as an opportunity candidate. Candidates are reviewed and validated before being promoted to the verified opportunity dataset.
 
 This workflow prevents unverified or failed collection results from being published directly to users.
 
@@ -118,7 +118,43 @@ This workflow prevents unverified or failed collection results from being publis
 
 ---
 
-## Architecture
+## System Architecture
+
+```mermaid
+flowchart LR
+    U["Users"]
+
+    subgraph Frontend
+        FE["HTML / CSS / JavaScript"]
+    end
+
+    subgraph Backend
+        API["FastAPI"]
+        REC["AI Recommendation"]
+        COL["Collection Engine"]
+    end
+
+    subgraph Data
+        DB[("Supabase PostgreSQL")]
+    end
+
+    subgraph External
+        SRC["Official APIs / Web Sources"]
+        AI["OpenAI API"]
+    end
+
+    U --> FE
+    FE --> API
+
+    API --> DB
+    API --> REC
+
+    REC --> DB
+    REC --> AI
+
+    SRC --> COL
+    COL --> DB
+```
 
 The frontend is implemented as static files and deployed through Vercel.
 
@@ -186,32 +222,44 @@ Only validated opportunities are promoted to the public opportunity dataset.
 
 ## AI Recommendation Flow
 
-```text
-User Preferences
-       │
-       ▼
-Opportunity Database
-       │
-       ▼
-Candidate Selection
-       │
-       ▼
- OpenAI API
-       │
-       ▼
-Structured Recommendation
-       │
-       ▼
-Top Matching Opportunities
+```mermaid
+flowchart TD
+    A["User Preferences"]
+    B["Opportunity Database"]
+    C["Candidate Selection"]
+    D["OpenAI API"]
+    E["Structured Recommendation"]
+    F["Top Matching Opportunities"]
+
+    A --> C
+    B --> C
+    C --> D
+    D --> E
+    E --> F
 ```
+
+The recommendation engine first selects relevant opportunities from the verified opportunity database based on the user's preferences.
+
+Only the selected candidate opportunities are sent to the AI model.
+
+The AI model compares the candidates with the user's preferences and returns structured recommendations containing up to three relevant opportunities.
 
 To control latency and API usage, the recommendation process limits the number of candidate opportunities sent to the AI model.
 
-The system is also designed to support caching, lighter models, summarized candidate data, and rule-based fallback strategies as the dataset grows.
+The system is also designed to support:
+
+- Recommendation caching
+- Lighter AI models
+- Summarized candidate data
+- Rule-based fallback strategies
+
+These strategies allow the recommendation system to scale as the opportunity dataset grows.
 
 ---
 
 ## Data Principles
+
+AI PATH KOREA follows several principles to maintain reliable opportunity data.
 
 - Application deadlines and actual event dates are stored separately.
 - Each opportunity maintains its official source URL.

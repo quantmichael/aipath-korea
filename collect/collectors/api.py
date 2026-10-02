@@ -21,16 +21,18 @@ BIZINFO_TOPIC_KEYWORDS = (
     "llm",
     "데이터",
     "빅데이터",
-    "디지털",
     "dx",
     "ax",
-    "sw",
-    "소프트웨어",
-    "블록체인",
-    "보안",
-    "스마트",
-    "ict",
-    "정보통신",
+)
+
+BIZINFO_DATA_PHRASES = (
+    "데이터 분석",
+    "데이터 활용",
+    "데이터 기반",
+    "데이터 인재",
+    "데이터 교육",
+    "데이터 경진",
+    "빅데이터",
 )
 
 
@@ -277,7 +279,15 @@ def _is_relevant_bizinfo_row(row: dict[str, Any]) -> bool:
         and value is not None
     ).lower()
 
-    return any(_matches_topic_keyword(haystack, keyword) for keyword in BIZINFO_TOPIC_KEYWORDS)
+    has_strong_ai_signal = any(
+        _matches_topic_keyword(haystack, keyword)
+        for keyword in BIZINFO_TOPIC_KEYWORDS
+        if keyword not in {"데이터", "빅데이터"}
+    )
+    has_data_opportunity_signal = any(
+        phrase in haystack for phrase in BIZINFO_DATA_PHRASES
+    )
+    return has_strong_ai_signal or has_data_opportunity_signal
 
 
 def _matches_topic_keyword(haystack: str, keyword: str) -> bool:

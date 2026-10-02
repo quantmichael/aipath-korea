@@ -114,8 +114,7 @@ def get_opportunities() -> dict:
                 )
                 """
             )
-            .neq("status", "draft")
-            .neq("status", "cancelled")
+            .in_("status", ["scheduled", "open", "ongoing"])
             .order("is_featured", desc=True)
             .order("application_deadline_at")
             .execute()
@@ -191,8 +190,7 @@ def get_opportunity(slug: str) -> dict:
                 """
             )
             .eq("slug", slug)
-            .neq("status", "draft")
-            .neq("status", "cancelled")
+            .in_("status", ["scheduled", "open", "ongoing"])
             .limit(1)
             .execute()
         )

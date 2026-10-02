@@ -194,15 +194,20 @@ def _extract_organizer(lines: list[str]) -> str | None:
         "주관": [],
         "운영": [],
     }
-    for line in lines[start_index + 1 : start_index + 8]:
+    section_lines = lines[start_index + 1 : start_index + 12]
+    for index, line in enumerate(section_lines):
         if "대회 주요 일정" in line:
             break
 
-        match = re.match(r"^(주최|주관|운영):\s*(.*)$", line)
+        match = re.match(r"^(주최|주관|운영)\s*:\s*(.*)$", line)
         if not match:
             continue
 
         label, value = match.groups()
+        if not value.strip() and index + 1 < len(section_lines):
+            next_line = section_lines[index + 1].strip()
+            if not re.match(r"^(주최|주관|운영)\s*:", next_line):
+                value = next_line
         if value.strip():
             values_by_label[label].append(value.strip())
 

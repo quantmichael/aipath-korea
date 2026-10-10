@@ -24,3 +24,18 @@ dist/
 build/
 .vercel
 tmp/
+
+# Local credentials and raw Agent artifacts must never be committed.
+credentials/
+secrets/
+*.pem
+*.p12
+*.pfx
+*.key
+*service-account*.json
+*credentials*.json
+*secret*.json
+*token*.json
+agent_raw_content/
+raw_content/
+logs/

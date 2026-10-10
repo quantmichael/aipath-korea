@@ -1,0 +1,18 @@
+FROM python:3.13.2-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements.agent.txt ./requirements.agent.txt
+RUN python -m pip install --no-cache-dir -r requirements.agent.txt \
+    && groupadd --system agent \
+    && useradd --system --gid agent --home-dir /app --no-create-home agent
+
+COPY --chown=agent:agent agent_collect ./agent_collect
+
+USER agent
+
+ENTRYPOINT ["python", "-m", "agent_collect.shadow_job"]

@@ -1,0 +1,4 @@
+# Agent runtime direct dependencies. Backend-only FastAPI, Uvicorn and dotenv
+# are intentionally excluded. Resolve transitive dependencies in the image.
+supabase==2.32.0
+openai==2.54.0

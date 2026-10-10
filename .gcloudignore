@@ -1,0 +1,30 @@
+# Cloud Build uploads only the Agent image inputs, not the repository.
+**
+!/agent_collect/
+!/agent_collect/**
+!/Dockerfile.agent
+!/requirements.agent.txt
+!/.dockerignore
+!/cloudbuild.agent.yaml
+
+# Defense in depth for files created beneath agent_collect later.
+agent_collect/migrations/
+agent_collect/README.md
+**/.env
+**/.env.*
+**/*credential*
+**/*secret*
+**/*token*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.json
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/tmp/
+**/logs/
+**/agent_raw_content/
+**/raw_content/
+**/test_artifacts/

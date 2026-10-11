@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timezone
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -12,6 +13,7 @@ from supabase import Client, create_client
 from collect.admin import apply_candidate_action, list_review_candidates
 from collect.promote import promote_candidates
 from collect.service import run_collection
+from runtime_access import is_read_only_runtime, require_read_only_supabase_key
 
 load_dotenv()
 
@@ -33,6 +35,155 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# Only rows moved to closed/ended by the lifecycle worker may remain publicly
+# visible. Existing closed rows have no worker provenance and stay private.
+PUBLIC_OPPORTUNITY_STATUSES = ["scheduled", "open", "closed", "ongoing", "ended"]
+ACTIVE_OPPORTUNITY_STATUSES = ["scheduled", "open", "ongoing"]
+ARCHIVE_OPPORTUNITY_STATUSES = ["closed", "ended"]
+RECOMMENDABLE_OPPORTUNITY_STATUSES = ["open"]
+
+# Temporary compatibility snapshot from the read-only Service DB audit on
+# 2026-10-11. Only these two rows have a matching pre-existing Collect
+# candidate with a collection run. Manual-source rows are deliberately absent.
+# This is not source-time evidence or permission for lifecycle enrollment.
+LEGACY_RECOMMENDATION_DEADLINES = {
+    "883d7e82-5870-474f-8d70-e39cedfeddff": "2026-10-12T00:00:00+00:00",
+    "032f0059-11d4-4799-80dd-84b505b86960": "2026-11-01T00:00:00+00:00",
+}
+LEGACY_COLLECT_ORIGINS = {
+    "883d7e82-5870-474f-8d70-e39cedfeddff": {
+        "source_id": "d2b608fa-030e-46f4-8e5d-60169b0a081b",
+        "external_id": "PBLN_000000000126814",
+        "candidate_id": "54eb504d-76e1-4334-b2a0-7224e8a466fc",
+        "collection_run_id": "30340d62-0ec2-43cd-9acb-8d26d6012b1c",
+        "opportunity_created_at": "2026-10-02T07:50:58.371164+00:00",
+        "candidate_created_at": "2026-09-28T12:26:29.216734+00:00",
+    },
+    "032f0059-11d4-4799-80dd-84b505b86960": {
+        "source_id": "5f55a58e-c465-4ae9-8e7e-c4a8fb3d8279",
+        "external_id": "https://dacon.io/competitions/official/236771/overview/",
+        "candidate_id": "53c6e18c-8fc8-44e6-bcf0-b6a24bef681a",
+        "collection_run_id": "fde1de0e-87c1-475c-b2ee-e158cabe597a",
+        "opportunity_created_at": "2026-10-02T07:51:01.060568+00:00",
+        "candidate_created_at": "2026-10-01T00:52:15.9204+00:00",
+    },
+}
+LEGACY_RECOMMENDATION_AUDIT_AT = datetime(
+    2026, 10, 11, tzinfo=timezone.utc
+)
+LEGACY_RECOMMENDATION_NOTICE = (
+    "모집 마감 날짜·시각은 기존 DB 기록이며 원문 확인 전입니다."
+)
+
+
+def _parse_instant(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return instant if instant.tzinfo is not None else None
+
+
+def _public_archive_ids(supabase: Client, rows: list[dict]) -> set[str]:
+    ids = [row["id"] for row in rows
+           if row.get("status") in ARCHIVE_OPPORTUNITY_STATUSES]
+    if not ids:
+        return set()
+    try:
+        response = supabase.rpc(
+            "opportunity_public_archive_ids", {"p_ids": ids}
+        ).execute()
+    except Exception:
+        # Missing migration or RPC failure must never expose legacy closed rows.
+        print("Public archive eligibility lookup failed")
+        return set()
+    return {row["opportunity_id"] for row in (response.data or [])}
+
+
+def _public_rows(supabase: Client, rows: list[dict]) -> list[dict]:
+    archive_ids = _public_archive_ids(supabase, rows)
+    return [row for row in rows
+            if row["status"] in ACTIVE_OPPORTUNITY_STATUSES
+            or (row["status"] in ARCHIVE_OPPORTUNITY_STATUSES
+                and row["id"] in archive_ids)]
+
+
+def _legacy_collect_origin_matches(candidate: dict, proof: dict | None) -> bool:
+    expected = LEGACY_COLLECT_ORIGINS.get(candidate.get("id"))
+    if not expected or not proof:
+        return False
+    opportunity_created = _parse_instant(candidate.get("created_at"))
+    candidate_created = _parse_instant(proof.get("created_at"))
+    if opportunity_created is None or candidate_created is None:
+        return False
+    return all((
+        candidate.get("source_id") == expected["source_id"],
+        candidate.get("external_id") == expected["external_id"],
+        proof.get("id") == expected["candidate_id"],
+        proof.get("source_id") == expected["source_id"],
+        proof.get("external_id") == expected["external_id"],
+        proof.get("collection_run_id") == expected["collection_run_id"],
+        opportunity_created == _parse_instant(expected["opportunity_created_at"]),
+        candidate_created == _parse_instant(expected["candidate_created_at"]),
+        candidate_created < opportunity_created,
+    ))
+
+
+def _recommendation_basis(candidate: dict, window: dict | None,
+                          now: datetime,
+                          legacy_proof: dict | None = None) -> str | None:
+    # Effective cutoffs come from the same evidence and KST policy as the
+    # worker. A separate, immutable legacy snapshot is considered below.
+    # Upcoming and already-running events are not currently recruiting.
+    if candidate.get("status") != "open":
+        return None
+    if window is None:
+        stored_deadline = _parse_instant(candidate.get("application_deadline_at"))
+        snapshot_deadline = _parse_instant(
+            LEGACY_RECOMMENDATION_DEADLINES.get(candidate.get("id"))
+        )
+        updated_at = _parse_instant(candidate.get("updated_at"))
+        event_start = _parse_instant(candidate.get("event_start_at"))
+        event_end = _parse_instant(candidate.get("event_end_at"))
+        if (_legacy_collect_origin_matches(candidate, legacy_proof)
+                and stored_deadline is not None
+                and stored_deadline == snapshot_deadline
+                and now < stored_deadline
+                and updated_at is not None
+                and updated_at < LEGACY_RECOMMENDATION_AUDIT_AT
+                and (not candidate.get("event_start_at")
+                     or (event_start is not None and now < event_start))
+                and (not candidate.get("event_end_at")
+                     or (event_end is not None and now < event_end))):
+            return "legacy_unverified_future"
+        return None
+    confirmed_end = _parse_instant(window.get("event_end_cutoff_at"))
+    if candidate.get("event_end_at"):
+        # A stored event end without source precision is not a cutoff.
+        if confirmed_end is None or now > confirmed_end:
+            return None
+    cutoff = _parse_instant(window.get("application_cutoff_at"))
+    if cutoff is None:
+        return None
+    if window.get("application_precision") == "EXACT_TIME":
+        return "verified" if now <= cutoff else None
+    if window.get("application_precision") == "DATE_ONLY":
+        return "verified" if now < cutoff else None
+    return None
+
+
+def _recommendation_date_safe(candidate: dict, window: dict | None,
+                              now: datetime) -> bool:
+    return _recommendation_basis(candidate, window, now) is not None
+
+
+def _legacy_recommendation_reason(reason: str) -> str:
+    suffix = " " + LEGACY_RECOMMENDATION_NOTICE
+    return reason[:300 - len(suffix)].rstrip() + suffix
+
 
 class RecommendationRequest(BaseModel):
     level: Literal["beginner", "intermediate", "advanced"]
@@ -64,12 +215,20 @@ class CandidateActionRequest(BaseModel):
 
 def create_supabase_client() -> Client:
     supabase_url = os.environ.get("SUPABASE_URL")
-    supabase_secret_key = os.environ.get("SUPABASE_SECRET_KEY")
+    if is_read_only_runtime():
+        supabase_key = os.environ.get("SUPABASE_READ_ONLY_KEY")
+        missing_message = "Preview 읽기 전용 Supabase 환경변수가 필요합니다."
+    else:
+        supabase_key = os.environ.get("SUPABASE_SECRET_KEY")
+        missing_message = "Supabase 환경변수가 설정되지 않았습니다."
 
-    if not supabase_url or not supabase_secret_key:
-        raise RuntimeError("Supabase 환경변수가 설정되지 않았습니다.")
+    if not supabase_url or not supabase_key:
+        raise RuntimeError(missing_message)
 
-    return create_client(supabase_url, supabase_secret_key)
+    if is_read_only_runtime():
+        require_read_only_supabase_key(supabase_key)
+
+    return create_client(supabase_url, supabase_key)
 
 
 @app.get("/api/opportunities")
@@ -114,13 +273,13 @@ def get_opportunities() -> dict:
                 )
                 """
             )
-            .in_("status", ["scheduled", "open", "ongoing"])
+            .in_("status", PUBLIC_OPPORTUNITY_STATUSES)
             .order("is_featured", desc=True)
             .order("application_deadline_at")
             .execute()
         )
 
-        opportunities = response.data or []
+        opportunities = _public_rows(supabase, response.data or [])
 
         return {
             "count": len(opportunities),
@@ -190,7 +349,7 @@ def get_opportunity(slug: str) -> dict:
                 """
             )
             .eq("slug", slug)
-            .in_("status", ["scheduled", "open", "ongoing"])
+            .in_("status", PUBLIC_OPPORTUNITY_STATUSES)
             .limit(1)
             .execute()
         )
@@ -209,7 +368,7 @@ def get_opportunity(slug: str) -> dict:
             detail="기회 상세 정보를 불러오지 못했습니다.",
         ) from error
 
-    opportunities = response.data or []
+    opportunities = _public_rows(supabase, response.data or [])
 
     if not opportunities:
         raise HTTPException(
@@ -225,14 +384,6 @@ def get_opportunity(slug: str) -> dict:
 def recommend_opportunities(
     user_input: RecommendationRequest,
 ) -> dict:
-    openai_api_key = os.environ.get("OPENAI_API_KEY")
-
-    if not openai_api_key:
-        raise HTTPException(
-            status_code=500,
-            detail="OpenAI 환경변수가 설정되지 않았습니다.",
-        )
-
     try:
         supabase = create_supabase_client()
 
@@ -240,6 +391,10 @@ def recommend_opportunities(
             supabase.table("opportunities")
             .select(
                 """
+                id,
+                source_id,
+                external_id,
+                created_at,
                 title,
                 slug,
                 summary,
@@ -253,6 +408,8 @@ def recommend_opportunities(
                 price_text,
                 application_deadline_at,
                 event_start_at,
+                event_end_at,
+                updated_at,
                 status,
                 categories (
                     name,
@@ -266,13 +423,52 @@ def recommend_opportunities(
                 )
                 """
             )
-            .in_("status", ["scheduled", "open", "ongoing"])
+            .in_("status", RECOMMENDABLE_OPPORTUNITY_STATUSES)
             .order("is_featured", desc=True)
             .limit(30)
             .execute()
         )
 
-        candidates = response.data or []
+        rows = response.data or []
+        windows = {}
+        if rows:
+            window_response = supabase.rpc(
+                "opportunity_recommendation_windows",
+                {"p_ids": [row["id"] for row in rows]},
+            ).execute()
+            windows = {row["opportunity_id"]: row
+                       for row in (window_response.data or [])}
+        legacy_ids = [row["id"] for row in rows
+                      if row["id"] in LEGACY_COLLECT_ORIGINS
+                      and row["id"] not in windows]
+        legacy_proofs = {}
+        if legacy_ids:
+            try:
+                proof_response = (
+                    supabase.table("opportunity_candidates")
+                    .select("id,source_id,external_id,collection_run_id,created_at")
+                    .in_("id", [LEGACY_COLLECT_ORIGINS[item]["candidate_id"]
+                                for item in legacy_ids])
+                    .execute()
+                )
+                proofs_by_id = {proof["id"]: proof
+                                for proof in (proof_response.data or [])}
+                legacy_proofs = {
+                    item: proofs_by_id.get(
+                        LEGACY_COLLECT_ORIGINS[item]["candidate_id"]
+                    ) for item in legacy_ids
+                }
+            except Exception:
+                # A provenance outage may reduce candidates, never expand them.
+                print("Legacy Collect provenance lookup failed")
+        now = datetime.now(timezone.utc)
+        eligible = [
+            (row, basis) for row in rows
+            if (basis := _recommendation_basis(
+                row, windows.get(row["id"]), now,
+                legacy_proofs.get(row["id"]),
+            )) is not None
+        ]
 
     except Exception as error:
         print(f"Recommendation candidate query failed: {error}")
@@ -282,7 +478,7 @@ def recommend_opportunities(
             detail="추천 후보를 불러오지 못했습니다.",
         ) from error
 
-    if not candidates:
+    if not eligible:
         return {
             "count": 0,
             "recommendations": [],
@@ -291,6 +487,21 @@ def recommend_opportunities(
             ),
         }
 
+    openai_api_key = os.environ.get("OPENAI_API_KEY")
+    if not openai_api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OpenAI 환경변수가 설정되지 않았습니다.",
+        )
+
+    # Remove guard-only fields to preserve the historical Opportunity payload.
+    candidates = [
+        {key: value for key, value in row.items()
+         if key not in {"id", "source_id", "external_id", "created_at",
+                        "event_end_at", "updated_at"}}
+        for row, _basis in eligible
+    ]
+    basis_by_slug = {row["slug"]: basis for row, basis in eligible}
     profile = user_input.model_dump()
 
     instructions = """
@@ -318,7 +529,10 @@ def recommend_opportunities(
 
     request_data = {
         "profile": profile,
-        "candidates": candidates,
+        "candidates": [
+            {**candidate, "deadline_evidence": basis_by_slug[candidate["slug"]]}
+            for candidate in candidates
+        ],
     }
 
     try:
@@ -353,7 +567,7 @@ def recommend_opportunities(
         for candidate in candidates
     }
 
-    verified_recommendations = []
+    selected_recommendations = []
     used_slugs = set()
 
     for recommendation in parsed_result.recommendations:
@@ -367,23 +581,27 @@ def recommend_opportunities(
 
         used_slugs.add(recommendation.slug)
 
-        verified_recommendations.append(
+        selected_recommendations.append(
             {
                 "opportunity": opportunity,
-                "reason": recommendation.reason,
+                "reason": (
+                    _legacy_recommendation_reason(recommendation.reason)
+                    if basis_by_slug[recommendation.slug] == "legacy_unverified_future"
+                    else recommendation.reason
+                ),
             }
         )
 
     message = (
         "현재 조건에 맞는 추천 기회가 없습니다. "
         "조건을 조금 넓혀 다시 시도해 보세요."
-        if not verified_recommendations
+        if not selected_recommendations
         else "추천 결과는 현재 등록된 DB 정보를 기준으로 생성되었습니다."
     )
 
     return {
-        "count": len(verified_recommendations),
-        "recommendations": verified_recommendations,
+        "count": len(selected_recommendations),
+        "recommendations": selected_recommendations,
         "message": message,
     }
 
@@ -532,6 +750,12 @@ def verify_collect_request(
     authorization: str | None,
     x_collect_secret: str | None,
 ) -> None:
+    if is_read_only_runtime():
+        raise HTTPException(
+            status_code=403,
+            detail="읽기 전용 Preview에서는 Collect API를 사용할 수 없습니다.",
+        )
+
     expected_secret = (
         os.environ.get("COLLECT_SECRET")
         or os.environ.get("CRON_SECRET")

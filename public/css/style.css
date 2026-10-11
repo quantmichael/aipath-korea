@@ -547,7 +547,7 @@ a {
 }
 
 .category-badge,
-.status-open {
+.status-badge {
   display: inline-flex;
   align-items: center;
   min-height: 28px;
@@ -565,6 +565,22 @@ a {
 .status-open {
   color: #087f5b;
   background: #e6fcf5;
+}
+
+.status-scheduled {
+  color: #1c5ca8;
+  background: #e7f1ff;
+}
+
+.status-ongoing {
+  color: #5f3db3;
+  background: #f0eaff;
+}
+
+.status-closed,
+.status-ended {
+  color: #596579;
+  background: #edf0f4;
 }
 
 .opportunity-card h3 {

@@ -45,6 +45,7 @@ function formatDate(dateValue) {
     year: "numeric",
     month: "long",
     day: "numeric",
+    timeZone: "Asia/Seoul",
   }).format(new Date(dateValue));
 }
 
@@ -96,6 +97,8 @@ function renderTags(tagRelations) {
 }
 
 function renderOpportunity(opportunity) {
+  document.querySelector("#detail-status").className =
+    `status-badge status-${opportunity.status}`;
   setText("#detail-category", opportunity.categories?.name, "기타");
   setText(
     "#detail-status",

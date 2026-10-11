@@ -8,11 +8,13 @@ from dotenv import load_dotenv
 from supabase import Client, create_client
 
 from collect.models import CollectionRunSummary, OpportunityCandidate, Source
+from runtime_access import require_collect_write_access
 
 load_dotenv()
 
 
 def create_supabase_client() -> Client:
+    require_collect_write_access()
     supabase_url = os.environ.get("SUPABASE_URL")
     supabase_secret_key = os.environ.get("SUPABASE_SECRET_KEY")
 
@@ -140,7 +142,7 @@ def find_existing_opportunity(
     if candidate.source_id and candidate.external_id:
         rows = (
             supabase.table("opportunities")
-            .select("id, slug, official_url")
+            .select("id, slug, official_url, status")
             .eq("source_id", candidate.source_id)
             .eq("external_id", candidate.external_id)
             .limit(1)
@@ -154,7 +156,7 @@ def find_existing_opportunity(
     if candidate.official_url:
         rows = (
             supabase.table("opportunities")
-            .select("id, slug, official_url")
+            .select("id, slug, official_url, status")
             .eq("official_url", candidate.official_url)
             .limit(1)
             .execute()
@@ -167,7 +169,7 @@ def find_existing_opportunity(
     if candidate.slug:
         rows = (
             supabase.table("opportunities")
-            .select("id, slug, official_url")
+            .select("id, slug, official_url, status")
             .eq("slug", candidate.slug)
             .limit(1)
             .execute()
@@ -345,14 +347,22 @@ def upsert_draft_opportunity(
     record = _candidate_to_opportunity_record(candidate)
 
     if existing:
+        # A previously public (or cancelled) row is never a draft upsert
+        # target. This also avoids changing its data before the evidence RPC.
+        if existing.get("status") != "draft":
+            return existing["id"], "protected_existing"
         response = (
             supabase.table("opportunities")
             .update(record)
             .eq("id", existing["id"])
+            .eq("status", "draft")
             .execute()
         )
         data = response.data or []
-        return (data[0]["id"] if data else existing["id"], "updated")
+        if not data:
+            # A concurrent publisher may have changed status after our read.
+            return existing["id"], "protected_existing"
+        return data[0]["id"], "updated"
 
     response = supabase.table("opportunities").insert(record).execute()
     data = response.data or []
@@ -363,13 +373,15 @@ def publish_opportunity(
     supabase: Client,
     opportunity_id: str,
 ) -> None:
-    supabase.table("opportunities").update(
+    response = supabase.table("opportunities").update(
         {
             "status": "open",
             "published_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-    ).eq("id", opportunity_id).execute()
+    ).eq("id", opportunity_id).eq("status", "draft").execute()
+    if not response.data:
+        raise RuntimeError("Opportunity is no longer draft; publication held")
 
 
 def mark_candidate_promoted(

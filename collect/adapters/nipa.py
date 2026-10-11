@@ -66,6 +66,28 @@ class NipaAdapter(HtmlSourceAdapter):
         if _is_missing_summary(candidate.summary):
             candidate.summary = detail_summary
         candidate.raw_payload["detail_collector"] = "nipa_detail"
+        candidate.raw_payload["status_date_evidence"] = {
+            field: value for field, value in (
+                ("application_start_at", candidate.application_start_at),
+                ("application_deadline_at", candidate.application_deadline_at),
+            ) if value is not None
+        }
+        clock_match = re.search(
+            r"신청기간\s*:\s*(\d{4}-\d{2}-\d{2})\s*(\d{2}:\d{2})\s*~\s*"
+            r"(\d{4}-\d{2}-\d{2})\s*(\d{2}:\d{2})", text,
+        )
+        if clock_match:
+            start_date, start_clock, end_date, end_clock = clock_match.groups()
+            candidate.raw_payload["status_time_evidence"] = {
+                "application_start_at": {
+                    "source_literal": f"{start_date}T{start_clock}:00",
+                    "source_ref": candidate.official_url,
+                },
+                "application_deadline_at": {
+                    "source_literal": f"{end_date}T{end_clock}:00",
+                    "source_ref": candidate.official_url,
+                },
+            }
         return candidate
 
 

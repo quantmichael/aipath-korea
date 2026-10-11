@@ -107,6 +107,11 @@ class DaconAdapter(HtmlSourceAdapter):
         candidate.event_end_at = candidate.event_end_at or schedule.get("event_end_at")
 
         candidate.raw_payload["detail_collector"] = "dacon_detail"
+        # Only directly labelled calendar dates are status evidence. The
+        # schedule parser also uses event end as a fallback registration
+        # deadline and another section as a fallback event start; those are
+        # useful display dates but not source proof of either boundary.
+        candidate.raw_payload["status_date_evidence"] = _direct_schedule_dates(lines)
         return candidate
 
 
@@ -323,6 +328,29 @@ def _extract_schedule(lines: list[str]) -> dict[str, str]:
             values["event_end_at"] = date_value
             values.setdefault("application_deadline_at", date_value)
 
+    return values
+
+
+def _direct_schedule_dates(lines: list[str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    year = datetime.now(timezone.utc).year
+    labels = (
+        ("참가 신청 시작", "application_start_at"),
+        ("참가 신청 마감", "application_deadline_at"),
+        ("대회 시작", "event_start_at"),
+        ("대회 종료", "event_end_at"),
+    )
+    for index, line in enumerate(lines):
+        if not re.fullmatch(r"\d{2}\.\d{2}", line):
+            continue
+        label = _next_non_noise_line(lines, index + 1)
+        source_date = _date_from_month_day(line, year=year)
+        if not label or not source_date or re.search(r"\d{1,2}:\d{2}", label):
+            continue
+        for marker, field in labels:
+            if marker in label:
+                values.setdefault(field, source_date)
+                break
     return values
 
 

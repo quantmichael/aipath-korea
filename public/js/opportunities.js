@@ -56,6 +56,7 @@ function formatDate(dateValue) {
     year: "numeric",
     month: "long",
     day: "numeric",
+    timeZone: "Asia/Seoul",
   }).format(new Date(dateValue));
 }
 
@@ -82,7 +83,7 @@ function createOpportunityCard(opportunity) {
 
   const statusBadge = createElement(
     "span",
-    "status-open",
+    `status-badge status-${opportunity.status}`,
     statusLabels[opportunity.status] || opportunity.status,
   );
 

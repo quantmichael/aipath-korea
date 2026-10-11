@@ -10,6 +10,7 @@ from collect.repository import (
     update_candidate_statuses,
     upsert_draft_opportunity,
 )
+from opportunity_status.evidence import build_collect_evidence
 
 
 def list_review_candidates(
@@ -95,12 +96,23 @@ def _publish_candidates(supabase, candidate_ids: list[str]) -> PromotionResult:
                 )
                 continue
 
-            opportunity_id, _ = upsert_draft_opportunity(supabase, candidate)
+            opportunity_id, disposition = upsert_draft_opportunity(supabase, candidate)
             if not opportunity_id:
                 result.failed_count += 1
                 result.errors.append(f"{candidate['id']}: opportunity save failed")
                 continue
+            if disposition == "protected_existing":
+                result.skipped_count += 1
+                result.errors.append(
+                    f"{candidate['id']}: existing non-draft Opportunity protected"
+                )
+                continue
 
+            supabase.rpc(
+                "record_opportunity_status_evidence",
+                {"p_opportunity_id": opportunity_id,
+                 "p_evidence": build_collect_evidence(candidate)},
+            ).execute()
             publish_opportunity(supabase, opportunity_id)
             mark_candidate_promoted(supabase, candidate["id"])
             result.promoted_count += 1

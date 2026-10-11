@@ -10,7 +10,10 @@ from uuid import uuid4
 from agent_collect.automation.runtime import AutomationRuntime
 from agent_collect.config.settings import load_settings
 from agent_collect.discovery.models import QueryStatus
-from agent_collect.discovery.scheduling import DiscoveryClaim, DiscoverySchedule, DiscoveryWorker
+from agent_collect.discovery.scheduling import (
+    DISCOVERY_QUERY_TEMPLATES, DISCOVERY_VERTICALS,
+    DiscoveryClaim, DiscoverySchedule, DiscoveryWorker, DiscoveryWorkerSummary,
+)
 from agent_collect.discovery.scheduling_supabase import SupabaseDiscoverySchedules
 from agent_collect.schemas.models import Vertical
 
@@ -178,6 +181,65 @@ class DiscoverySchedulingTests(unittest.TestCase):
             replace(schedule(), interval_minutes=60)
         with self.assertRaises(ValueError):
             replace(schedule(), next_run_at=datetime(2026, 10, 4))
+
+    def test_phase11b_vertical_schedule_queries(self):
+        self.assertEqual(set(DISCOVERY_QUERY_TEMPLATES), DISCOVERY_VERTICALS)
+        for vertical in (Vertical.CONFERENCE, Vertical.COMPETITION, Vertical.HACKATHON,
+                         Vertical.EDUCATION, Vertical.RESEARCH, Vertical.GRANT, Vertical.JOB):
+            with self.subTest(vertical=vertical):
+                worker, _, runner = self.worker([replace(schedule(), vertical=vertical)])
+                summary = worker.run_once()
+                self.assertEqual(summary.success_count, 1)
+                self.assertEqual(runner.calls[0].vertical_hint, vertical)
+        with self.assertRaises(ValueError):
+            replace(schedule(), vertical=Vertical.UNKNOWN)
+
+    def test_phase11b_migration_is_disabled_and_least_privilege(self):
+        sql = (Path(__file__).parents[1] / "agent_collect/migrations/009_discovery_coverage.sql").read_text()
+        self.assertIn("new.vertical_hint<>v_schedule.vertical", sql)
+        self.assertIn("p_vertical not in ('conference'", sql)
+        self.assertIn("p_interval_minutes<1440", sql)
+        self.assertIn("p_reviewer", sql)
+        self.assertIn("false,", sql)
+        self.assertIn("to service_role", sql)
+        for forbidden in ("drop table", "truncate", "public.opportunities", "grant update on",
+                          "grant insert on", "grant delete on"):
+            self.assertNotIn(forbidden, sql.lower())
+
+    def test_phase11c_discovery_summary_persists_classified_counts(self):
+        class LogClient:
+            def table(self, name):
+                self.name = name
+                return self
+
+            def insert(self, payload):
+                self.payload = payload
+                return self
+
+            def execute(self):
+                return SimpleNamespace(data=None)
+
+        client = LogClient()
+        summary = DiscoveryWorkerSummary(
+            worker_id="offline", started_at=NOW, finished_at=NOW,
+            dry_run=False, due_count=1, claimed_count=1, success_count=1,
+            failure_count=0, budget_blocked_count=0, skipped_count=0, previews=(),
+            discovered_count=4, candidate_count=3, auto_approved_count=1,
+            review_required_count=1, rejected_count=1,
+            collection_scheduled_count=1,
+            approval_failure_reasons=("scope_not_unique_or_not_reviewed",),
+            query_ids=("query-fixture",), promoted_source_ids=("source-fixture",),
+        )
+        SupabaseDiscoverySchedules(client).record_summary(summary)
+        self.assertEqual(client.name, "agent_logs")
+        details = client.payload["details"]
+        self.assertEqual((details["discovered_count"], details["candidate_count"],
+                          details["auto_approved_count"], details["collection_scheduled_count"]),
+                         (4, 3, 1, 1))
+        self.assertEqual(details["approval_failure_reasons"],
+                         ["scope_not_unique_or_not_reviewed"])
+        self.assertEqual((details["query_ids"], details["promoted_source_ids"]),
+                         (["query-fixture"], ["source-fixture"]))
 
     def test_four_worker_order_failure_isolation_and_dry_run(self):
         calls = []

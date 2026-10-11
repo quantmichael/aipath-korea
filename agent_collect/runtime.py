@@ -14,6 +14,9 @@ from agent_collect.adapters.service_db.supabase_tables import SupabaseServiceTab
 from agent_collect.collectors.runner import CollectionRunner
 from agent_collect.config.settings import AgentSettings, load_settings
 from agent_collect.discovery.evaluation import RuleBasedEvaluator
+from agent_collect.discovery.auto_approval import (
+    AutoApprovalAssessor, AutoApprovalExecutor, load_approval_scopes,
+)
 from agent_collect.discovery.budget import SearchBudgetGuard, SearchBudgetPolicy
 from agent_collect.discovery.providers import SearchProvider, SearchRequestPolicy
 from agent_collect.discovery.tavily import TavilySearchProvider
@@ -101,6 +104,12 @@ class AgentRuntime:
         )
 
     def collection_runner(self, raw_dir: Path, *, environ: Mapping[str, str] | None = None) -> CollectionRunner:
+        auto_checker = None
+        if self.settings.discovery_auto_approval_enabled:
+            auto_checker = AutoApprovalAssessor(
+                load_approval_scopes(self.settings.discovery_auto_approval_scopes_json),
+                user_agent=self.settings.user_agent,
+            ).revalidate_source
         return CollectionRunner(
             sources=self.sources,
             runs=self.runs,
@@ -109,6 +118,7 @@ class AgentRuntime:
             planner=CollectionPlanner(),
             settings=self.settings,
             environ=environ,
+            auto_permission_checker=auto_checker,
         )
 
     def raw_storage(self, raw_dir: Path):
@@ -188,6 +198,23 @@ class AgentRuntime:
                 raise RuntimeError("Discovery repository or Supabase client required")
             repository = SupabaseDiscoveryRepository(client)
         registry = SourceRegistryService(self.sources)
+        auto_assessor = auto_executor = None
+        if self.settings.discovery_auto_approval_enabled:
+            client = getattr(self.sources, "client", None)
+            if client is None:
+                raise RuntimeError("auto approval requires audited Supabase Source review")
+            auto_assessor = AutoApprovalAssessor(
+                load_approval_scopes(self.settings.discovery_auto_approval_scopes_json),
+                user_agent=self.settings.user_agent,
+            )
+            def schedule_confirmed(source):
+                rows = (client.table("agent_source_schedules")
+                        .select("source_id").eq("source_id", str(source.id))
+                        .limit(1).execute().data or [])
+                return len(rows) == 1 and rows[0].get("source_id") == str(source.id)
+
+            auto_executor = AutoApprovalExecutor(
+                self.source_approval_service(), schedule_verifier=schedule_confirmed)
         budget_guard = None
         if provider.name == "tavily":
             budget_guard = SearchBudgetGuard(
@@ -212,6 +239,8 @@ class AgentRuntime:
                 timeout_seconds=self.settings.discovery_request_timeout_seconds,
             ),
             budget_guard=budget_guard,
+            auto_assessor=auto_assessor,
+            auto_executor=auto_executor,
         )
 
     def discovery_worker(self, *, worker_id: str) -> DiscoveryWorker:

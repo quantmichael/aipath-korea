@@ -5,7 +5,7 @@ from typing import Any
 from uuid import UUID
 
 from agent_collect.discovery.scheduling import (
-    DiscoveryClaim, DiscoverySchedule, DiscoveryWorkerSummary,
+    DISCOVERY_VERTICALS, DiscoveryClaim, DiscoverySchedule, DiscoveryWorkerSummary,
 )
 from agent_collect.schemas.models import Vertical
 
@@ -33,11 +33,17 @@ class SupabaseDiscoverySchedules:
         return [self._schedule(row) for row in rows]
 
     def register_reviewed(self, *, query_text: str, language: str, country: str,
-                          interval_minutes: int, reviewer: str, reason: str) -> DiscoverySchedule:
-        row = self.client.rpc("agent_register_discovery_schedule", {
+                          interval_minutes: int, reviewer: str, reason: str,
+                          vertical: Vertical = Vertical.CONFERENCE) -> DiscoverySchedule:
+        if vertical not in DISCOVERY_VERTICALS:
+            raise ValueError("unsupported Discovery schedule vertical")
+        method = ("agent_register_discovery_schedule" if vertical is Vertical.CONFERENCE
+                  else "agent_register_discovery_schedule_vertical")
+        row = self.client.rpc(method, {
             "p_query_text": query_text, "p_language": language, "p_country": country,
             "p_interval_minutes": interval_minutes, "p_reviewer": reviewer,
             "p_reason": reason,
+            **({"p_vertical": vertical.value} if vertical is not Vertical.CONFERENCE else {}),
         }).execute().data
         if not isinstance(row, dict) or row.get("enabled") is not False:
             raise RuntimeError("reviewed Discovery registration was not confirmed inactive")
@@ -93,6 +99,15 @@ class SupabaseDiscoverySchedules:
                 "failure_count": summary.failure_count,
                 "budget_blocked_count": summary.budget_blocked_count,
                 "skipped_count": summary.skipped_count,
+                "discovered_count": summary.discovered_count,
+                "candidate_count": summary.candidate_count,
+                "auto_approved_count": summary.auto_approved_count,
+                "review_required_count": summary.review_required_count,
+                "rejected_count": summary.rejected_count,
+                "collection_scheduled_count": summary.collection_scheduled_count,
+                "approval_failure_reasons": list(summary.approval_failure_reasons),
+                "query_ids": list(summary.query_ids),
+                "promoted_source_ids": list(summary.promoted_source_ids),
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()

@@ -21,6 +21,7 @@ automation_lease_seconds = 3600
 user_agent = "AIPATH-AgentCollect/0.1 (+https://aipath.kr)"
 llm_model = ""
 discovery_promotion_threshold = 0.90
+discovery_auto_approval_scopes_json = "[]"
 discovery_search_provider = ""
 discovery_official_domain_hints = []
 discovery_max_results = 5
@@ -55,6 +56,7 @@ collection_failure_review_threshold = 4
 
 [features]
 discovery_enabled = false
+discovery_auto_approval_enabled = false
 llm_enabled = false
 publish_enabled = false
 automation_enabled = false

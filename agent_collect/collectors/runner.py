@@ -3,7 +3,7 @@
 import os
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from typing import Mapping
+from typing import Callable, Mapping
 from uuid import UUID, uuid4
 
 from agent_collect.collectors.contracts import CollectionRequest, CollectionResult
@@ -15,7 +15,7 @@ from agent_collect.repositories.contracts import (
     RawDocumentRepository,
     SourceRepository,
 )
-from agent_collect.schemas.models import CollectionRun, RawDocument
+from agent_collect.schemas.models import CollectionRun, RawDocument, Source
 from agent_collect.schemas.status import RunStatus, SourceStatus
 from agent_collect.registry.approval import source_is_collectible
 from agent_collect.storage.raw import RawContentStorage
@@ -44,6 +44,7 @@ class CollectionRunner:
         planner: CollectionPlanner,
         settings: AgentSettings,
         environ: Mapping[str, str] | None = None,
+        auto_permission_checker: Callable[[Source], bool] | None = None,
     ) -> None:
         self.sources = sources
         self.runs = runs
@@ -52,6 +53,7 @@ class CollectionRunner:
         self.planner = planner
         self.settings = settings
         self.environ = os.environ if environ is None else environ
+        self.auto_permission_checker = auto_permission_checker
         self.registry = SourceRegistryService(sources)
 
     def run_source(
@@ -90,6 +92,9 @@ class CollectionRunner:
         try:
             if not source_is_collectible(source):
                 raise ValueError("source lacks reviewed ACTIVE approval")
+            if source.provenance.get("auto_approval", {}).get("eligible") is True:
+                if self.auto_permission_checker is None or not self.auto_permission_checker(source):
+                    raise ValueError("automatic Source permission is no longer verified")
             collector = self.planner.plan(source)
             config = source.collection_config
             headers = dict(config.get("headers", {}))

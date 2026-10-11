@@ -76,6 +76,13 @@ class AutomationRuntime:
                         if field.name.endswith("_count") and
                         isinstance(getattr(result, field.name), int)
                     } if is_dataclass(result) else {} for name, result in results.items()},
+                    "discovered_count": getattr(results.get("discovery"), "discovered_count", 0),
+                    "candidate_count": getattr(results.get("discovery"), "candidate_count", 0),
+                    "auto_approved_count": getattr(results.get("discovery"), "auto_approved_count", 0),
+                    "review_required_count": getattr(results.get("discovery"), "review_required_count", 0),
+                    "rejected_count": getattr(results.get("discovery"), "rejected_count", 0),
+                    "collection_scheduled_count": getattr(results.get("discovery"), "collection_scheduled_count", 0),
+                    "collection_success_count": getattr(results.get("collection"), "success_count", 0),
                     "errors": errors,
                 })
             return summary

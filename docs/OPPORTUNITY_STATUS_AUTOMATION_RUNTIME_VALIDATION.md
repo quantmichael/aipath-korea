@@ -6,6 +6,8 @@
 > 이후의 활성화와 첫 자동 실행 결과는 문서 마지막 절에 기록했다.
 > 이 문서만 Preview 전용 브랜치에 기록하며 언급된 Migration·Cron SQL 파일은
 > 이번 문서 전용 커밋에 포함하지 않는다.
+> 이후 Production 배포·검증된 근거 3건 등록·첫 상태 전이 결과는
+> [Production release](OPPORTUNITY_STATUS_AUTOMATION_PRODUCTION_RELEASE.md)에 기록했다.
 
 ## [Migration 002]
 
@@ -75,4 +77,4 @@ Migration 객체, 권한, 상태 작업자와 오류 경로의 운영 PostgreSQL
 - `anon`·`authenticated`는 `cron` 스키마 USAGE와 `cron.job` INSERT
   권한이 없었다. 시간 근거 추가, Production 애플리케이션 배포,
   Cloud Run/Scheduler 변경은 하지 않았다. 근거 scope가 여전히 0건이므로
-  현재 Cron은 상태를 변경하지 않는다.
+  이 활성화 시점의 Cron은 상태를 변경하지 않았다.

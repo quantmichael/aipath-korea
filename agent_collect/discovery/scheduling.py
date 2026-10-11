@@ -11,18 +11,20 @@ from agent_collect.schemas.models import Vertical
 
 
 DISCOVERY_VERTICALS = frozenset({
-    Vertical.CONFERENCE, Vertical.COMPETITION, Vertical.HACKATHON,
-    Vertical.EDUCATION, Vertical.RESEARCH, Vertical.GRANT, Vertical.JOB,
+    Vertical.CONFERENCE, Vertical.EXHIBITION, Vertical.COMPETITION, Vertical.HACKATHON,
+    Vertical.EDUCATION, Vertical.RESEARCH, Vertical.GRANT, Vertical.PROGRAM, Vertical.JOB,
 })
 
 # Reviewed schedule proposals only. Importing this module never registers them.
 DISCOVERY_QUERY_TEMPLATES: dict[Vertical, tuple[str, str]] = {
     Vertical.CONFERENCE: ("AI conference Korea official call for papers", "인공지능 학회 공식 논문모집"),
+    Vertical.EXHIBITION: ("AI exhibition Korea official registration", "인공지능 전시회 공식 참가 모집"),
     Vertical.COMPETITION: ("AI competition Korea official call for entries", "인공지능 공모전 공식 모집"),
     Vertical.HACKATHON: ("AI hackathon Korea official registration", "인공지능 해커톤 공식 참가자 모집"),
     Vertical.EDUCATION: ("AI education Korea official course application", "인공지능 교육 공식 수강생 모집"),
     Vertical.RESEARCH: ("AI research program Korea official call for proposals", "인공지능 연구 프로그램 공식 모집"),
     Vertical.GRANT: ("AI government grant Korea official support program", "인공지능 정부 지원사업 공식 공고"),
+    Vertical.PROGRAM: ("AI accelerator Korea official application", "인공지능 프로그램 공식 참가자 모집"),
     Vertical.JOB: ("AI fellowship Korea official recruitment", "인공지능 관련 공식 모집 공고"),
 }
 

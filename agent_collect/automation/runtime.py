@@ -33,9 +33,12 @@ class AutomationRuntime:
         self.lease, self.worker_id, self.lease_seconds = lease, worker_id, lease_seconds
 
     def status(self) -> dict[str, Any]:
+        names = ("discovery", "collection", "processing", "publish")
+        if self.worker_enabled.get("ai_plan") or self.worker_enabled.get("ai_execute"):
+            names = ("ai_plan", "ai_execute", *names)
         return {"automation_enabled": self.enabled,
                 "workers": {name: bool(self.worker_enabled.get(name, False))
-                for name in ("discovery", "collection", "processing", "publish")}}
+                for name in names}}
 
     def run_once(self, *, dry_run: bool = False) -> AutomationSummary:
         run_id = uuid4()
@@ -55,7 +58,7 @@ class AutomationRuntime:
                 return AutomationSummary(run_id, started, datetime.now(timezone.utc),
                                          False, "LOCKED", results, errors)
         try:
-            for name in ("discovery", "collection", "processing", "publish"):
+            for name in ("ai_plan", "ai_execute", "discovery", "collection", "processing", "publish"):
                 if not self.worker_enabled.get(name, False):
                     continue
                 try:

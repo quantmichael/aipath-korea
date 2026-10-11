@@ -7,6 +7,7 @@ from uuid import UUID
 from agent_collect.discovery.scheduling import (
     DISCOVERY_VERTICALS, DiscoveryClaim, DiscoverySchedule, DiscoveryWorkerSummary,
 )
+from agent_collect.discovery.planner import SearchPlan
 from agent_collect.schemas.models import Vertical
 
 
@@ -31,6 +32,27 @@ class SupabaseDiscoverySchedules:
     def list_due(self, limit: int) -> list[DiscoverySchedule]:
         rows = self.client.rpc("agent_list_due_discovery", {"p_limit": limit}).execute().data or []
         return [self._schedule(row) for row in rows]
+
+    def list_all(self) -> list[DiscoverySchedule]:
+        """Read every reviewed schedule so proposed queries never duplicate it."""
+        rows: list[DiscoverySchedule] = []
+        offset = 0
+        while True:
+            page = (self.client.table("agent_discovery_schedules").select("*")
+                    .order("id").range(offset, offset + 999).execute().data or [])
+            rows.extend(self._schedule(row) for row in page)
+            if len(page) < 1000:
+                return rows
+            offset += len(page)
+
+    def record_plan(self, plan: SearchPlan) -> None:
+        """Optional audit write; never called by the read-only preview path."""
+        self.client.table("agent_logs").insert({
+            "level": "INFO", "event_type": "DISCOVERY_PLAN",
+            "message": "dry-run Discovery plan; no provider call or schedule activation",
+            "details": plan.audit_details(),
+            "created_at": plan.created_at.isoformat(),
+        }).execute()
 
     def register_reviewed(self, *, query_text: str, language: str, country: str,
                           interval_minutes: int, reviewer: str, reason: str,
@@ -107,6 +129,8 @@ class SupabaseDiscoverySchedules:
                 "collection_scheduled_count": summary.collection_scheduled_count,
                 "approval_failure_reasons": list(summary.approval_failure_reasons),
                 "query_ids": list(summary.query_ids),
+                "planned_query_count": 0,
+                "executed_query_count": len(summary.query_ids),
                 "promoted_source_ids": list(summary.promoted_source_ids),
             },
             "created_at": datetime.now(timezone.utc).isoformat(),

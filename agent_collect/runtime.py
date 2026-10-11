@@ -2,7 +2,8 @@
 
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
@@ -21,10 +22,16 @@ from agent_collect.discovery.budget import SearchBudgetGuard, SearchBudgetPolicy
 from agent_collect.discovery.providers import SearchProvider, SearchRequestPolicy
 from agent_collect.discovery.tavily import TavilySearchProvider
 from agent_collect.discovery.scheduling import DiscoveryWorker
+from agent_collect.discovery.planner import AutonomousDiscoveryPlanner, SearchPlan
+from agent_collect.discovery.goal import GoalDrivenDiscoveryPlanner, OpenAIGoalPlanner
+from agent_collect.discovery.goal_supabase import (
+    GoalExecutionWorker, GoalPlanningWorker, SupabaseGoalContext, SupabaseGoalPlans,
+)
 from agent_collect.discovery.scheduling_supabase import SupabaseDiscoverySchedules
 from agent_collect.discovery.models import DiscoveryQuery
 from agent_collect.schemas.models import Vertical
 from agent_collect.discovery.runner import DiscoveryRunner, PromotionGate
+from agent_collect.budget.reservations import SupabaseBudgetReservations
 from agent_collect.extraction.providers import ExtractionProvider
 from agent_collect.extraction.providers import OpenAIExtractionProvider
 from agent_collect.extraction.runner import ExtractionRunner
@@ -241,6 +248,10 @@ class AgentRuntime:
             budget_guard=budget_guard,
             auto_assessor=auto_assessor,
             auto_executor=auto_executor,
+            reservations=(SupabaseBudgetReservations(getattr(self.sources, "client"))
+                          if provider.name == "tavily" and
+                          getattr(self.sources, "client", None) is not None
+                          else None),
         )
 
     def discovery_worker(self, *, worker_id: str) -> DiscoveryWorker:
@@ -262,6 +273,32 @@ class AgentRuntime:
         if client is None:
             raise RuntimeError("Discovery scheduling requires an Agent Supabase client")
         return SupabaseDiscoverySchedules(client)
+
+    def discovery_plan_preview(self, *, now: datetime | None = None) -> SearchPlan:
+        """Read-only proposal using existing schedules and the persistent usage ledger."""
+        client = getattr(self.sources, "client", None)
+        if client is None:
+            raise RuntimeError("Discovery planning requires an Agent Supabase client")
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        policy = SearchBudgetPolicy(
+            daily_limit=self.settings.discovery_daily_search_limit,
+            monthly_limit=self.settings.discovery_monthly_search_limit,
+            cooldown_hours=self.settings.discovery_query_cooldown_hours,
+            timezone_name=self.settings.discovery_budget_timezone,
+            warning_threshold=self.settings.discovery_monthly_warning_threshold,
+            critical_threshold=self.settings.discovery_monthly_critical_threshold,
+        )
+        local = now.astimezone(ZoneInfo(policy.timezone_name))
+        month_start = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        since = min(month_start.astimezone(timezone.utc),
+                    now - timedelta(hours=policy.cooldown_hours))
+        schedules = tuple(self.discovery_schedule_repository().list_all())
+        queries = tuple(SupabaseDiscoveryRepository(client).list_queries_since("tavily", since))
+        return AutonomousDiscoveryPlanner(
+            policy=policy, daily_plan_limit=min(3, policy.daily_limit)).plan(
+            now=now, existing_schedules=schedules, recent_queries=queries)
 
     def automation_status_live(self) -> dict[str, Any]:
         """Bounded read-only status; an unavailable migration is reported, not hidden."""
@@ -381,12 +418,25 @@ class AgentRuntime:
         return AutomationRuntime(
             enabled=self.settings.automation_enabled,
             worker_enabled={
+                "ai_plan": self.settings.ai_discovery_planner_enabled,
+                "ai_execute": self.settings.ai_discovery_execution_enabled,
                 "discovery": self.settings.discovery_worker_enabled and self.settings.discovery_enabled,
                 "collection": self.settings.collection_worker_enabled,
                 "processing": self.settings.processing_worker_enabled,
                 "publish": self.settings.publish_worker_enabled and self.settings.publish_enabled,
             },
             workers={
+                "ai_plan": lambda: GoalPlanningWorker(
+                    context=SupabaseGoalContext(client), plans=SupabaseGoalPlans(client),
+                    budget=SupabaseBudgetReservations(client),
+                    planner=GoalDrivenDiscoveryPlanner(OpenAIGoalPlanner(
+                        os.environ.get("OPENAI_API_KEY"), model=self.settings.extraction_model)),
+                    enabled=self.settings.ai_discovery_planner_enabled),
+                "ai_execute": lambda: GoalExecutionWorker(
+                    plans=SupabaseGoalPlans(client),
+                    runner=self.discovery_runner(TavilySearchProvider(
+                        os.environ.get("AGENT_TAVILY_API_KEY"))),
+                    enabled=self.settings.ai_discovery_execution_enabled),
                 "discovery": lambda: self.discovery_worker(worker_id=worker_id),
                 "collection": lambda: self.collection_worker(raw_dir, worker_id=worker_id),
                 "processing": lambda: self.processing_worker(raw_dir, worker_id=worker_id),

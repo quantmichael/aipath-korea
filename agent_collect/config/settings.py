@@ -27,6 +27,8 @@ class AgentSettings:
     publish_enabled: bool
     discovery_promotion_threshold: float = 0.90
     discovery_auto_approval_enabled: bool = False
+    ai_discovery_planner_enabled: bool = False
+    ai_discovery_execution_enabled: bool = False
     discovery_auto_approval_scopes_json: str = "[]"
     discovery_search_provider: str = ""
     discovery_official_domain_hints: tuple[str, ...] = ()
@@ -86,6 +88,8 @@ class AgentSettings:
         require_confidence(self.discovery_promotion_threshold, "discovery_promotion_threshold")
         if self.discovery_auto_approval_enabled and self.discovery_auto_approval_scopes_json.strip() == "[]":
             raise ValueError("auto approval requires reviewed scopes")
+        if self.ai_discovery_execution_enabled and not self.ai_discovery_planner_enabled:
+            raise ValueError("AI Discovery execution requires the planner")
         if not 1 <= self.discovery_max_results <= 20 or self.discovery_request_timeout_seconds <= 0:
             raise ValueError("discovery result limit/timeout settings are invalid")
         if min(self.discovery_daily_search_limit, self.discovery_monthly_search_limit,
@@ -199,6 +203,8 @@ def load_settings(
         discovery_promotion_threshold=float(value(
             "discovery_promotion_threshold", policy["discovery_promotion_threshold"])),
         discovery_auto_approval_enabled=flag("discovery_auto_approval_enabled"),
+        ai_discovery_planner_enabled=flag("ai_discovery_planner_enabled"),
+        ai_discovery_execution_enabled=flag("ai_discovery_execution_enabled"),
         discovery_auto_approval_scopes_json=str(value(
             "discovery_auto_approval_scopes_json", policy["discovery_auto_approval_scopes_json"])),
         discovery_search_provider=str(value(

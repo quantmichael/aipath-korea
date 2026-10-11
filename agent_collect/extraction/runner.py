@@ -3,6 +3,7 @@
 import hashlib
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
+from agent_collect.budget.reservations import BudgetReservations, SupabaseBudgetReservations
 
 from agent_collect.config.settings import AgentSettings
 from agent_collect.extraction.budget import (
@@ -27,12 +28,18 @@ from agent_collect.storage.raw import RawContentStorage
 class ExtractionRunner:
     def __init__(self, *, documents: RawDocumentRepository, storage: RawContentStorage,
                  repository: ExtractionRepository, provider: ExtractionProvider,
-                 settings: AgentSettings) -> None:
+                 settings: AgentSettings, reservations: BudgetReservations | None = None) -> None:
         self.documents = documents
         self.storage = storage
         self.repository = repository
         self.provider = provider
         self.settings = settings
+        # Every Supabase OpenAI call uses the shared ledger, even while the AI
+        # planner is OFF. A missing migration 011 RPC fails closed.
+        self.reservations = reservations or (
+            SupabaseBudgetReservations(repository.client)
+            if provider.name == "openai" and getattr(repository, "client", None) is not None
+            else None)
         self.guard = ExtractionBudgetGuard(
             repository, policy=ExtractionBudgetPolicy(
                 daily_limit=settings.extraction_daily_llm_limit,
@@ -141,16 +148,26 @@ class ExtractionRunner:
             max_output_tokens=self.settings.extraction_max_output_tokens,
             timeout_seconds=self.settings.extraction_timeout_seconds,
         )
-        # Durable reservation before the billable call. DB failure aborts the call.
+        reservation_id = None
+        if self.reservations is not None:
+            reservation_id = self.reservations.reserve(
+                kind="openai", scope="extraction",
+                key=f"extraction:{fingerprint}:{max(retry_count, decision.previous_attempts)}")
+            self.reservations.dispatch(reservation_id)
+        # Durable audit before the billable call. DB failure aborts the call.
         self.repository.log(event_type="EXTRACTION_LLM_ATTEMPT", source_id=document.source_id,
                             run_id=document.run_id, details={"raw_document_id": str(document.id),
                                                              "fingerprint": fingerprint,
                                                              "provider": self.provider.name,
                                                              "model": self.provider.model,
                                                              "prompt_version": PROMPT_VERSION,
-                                                             "input_hash": input_hash})
+                                                             "input_hash": input_hash,
+                                                             **({"budget_reservation_id": str(reservation_id)}
+                                                                if reservation_id else {})})
         try:
             response = self.provider.extract(request)
+            if reservation_id is not None:
+                self.reservations.finish(reservation_id, status="SUCCEEDED")
             candidate = validate_provider_payload(response.payload, source_url=document.source_url)
             model_document_confidence = candidate.document_confidence
             candidate = validate_candidate(candidate, prepared=prepared,
@@ -200,6 +217,16 @@ class ExtractionRunner:
                                      extracted_at, input_hash, candidate.review_reasons)
         except Exception as error:
             code = error.code if isinstance(error, ExtractionProviderError) else type(error).__name__
+            if reservation_id is not None:
+                # A successful model response may fail local validation/storage;
+                # its reservation is already SUCCEEDED and cannot be changed.
+                try:
+                    uncertain = code in {"TIMEOUT", "PROVIDER_ERROR"}
+                    self.reservations.finish(reservation_id,
+                                             status="UNKNOWN" if uncertain else "FAILED",
+                                             error_code=code.upper()[:80])
+                except RuntimeError:
+                    pass
             self.repository.log(event_type="EXTRACTION_FAILED", source_id=document.source_id,
                                 run_id=document.run_id, details={"raw_document_id": str(document.id),
                                                                  "code": code,

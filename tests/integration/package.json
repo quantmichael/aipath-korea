@@ -2,7 +2,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:postgres": "node agent_phase11c_postgres.mjs"
+    "test:postgres": "node agent_phase11c_postgres.mjs",
+    "test:phase12a": "node agent_phase12a_postgres.mjs",
+    "test:phase12b": "node agent_phase12b_postgres.mjs"
   },
   "devDependencies": {
     "embedded-postgres": "18.4.0-beta.17"

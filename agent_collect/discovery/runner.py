@@ -2,7 +2,9 @@
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import re
 from uuid import uuid4
+from agent_collect.budget.reservations import BudgetReservations
 
 from agent_collect.discovery.evaluation import SourceEvaluator
 from agent_collect.discovery.auto_approval import AutoApprovalAssessor, AutoApprovalExecutor
@@ -99,6 +101,7 @@ class DiscoveryRunner:
         budget_guard: SearchBudgetGuard | None = None,
         auto_assessor: AutoApprovalAssessor | None = None,
         auto_executor: AutoApprovalExecutor | None = None,
+        reservations: BudgetReservations | None = None,
     ) -> None:
         self.provider = provider
         self.repository = repository
@@ -111,6 +114,7 @@ class DiscoveryRunner:
         if (auto_assessor is None) != (auto_executor is None):
             raise ValueError("auto approval requires both assessment and audited transition")
         self.budget_guard = budget_guard
+        self.reservations = reservations
         self.auto_assessor, self.auto_executor = auto_assessor, auto_executor
 
     def run(self, query: DiscoveryQuery) -> DiscoveryOutcome:
@@ -137,9 +141,29 @@ class DiscoveryRunner:
                 "budget_monthly_usage_before": decision.monthly_usage,
                 "budget_level_before": decision.level.value,
             })
+        reservation_id = None
+        if self.provider.name == "tavily" and self.reservations is not None:
+            # This RPC is the final authority. The Python guard above is only
+            # a cheap preflight and may race another worker.
+            reservation_id = self.reservations.reserve(
+                kind="tavily", scope="discovery", key=f"discovery:{query.id}",
+                query_text=query.text)
+            query = replace(query, provenance={**query.provenance,
+                                               "budget_reservation_id": str(reservation_id)})
         query = self.repository.save_query(replace(
             query, status=QueryStatus.RUNNING, started_at=datetime.now(timezone.utc),
         ))
+        if reservation_id is not None:
+            # A failed acknowledgement must never reach the billable provider.
+            try:
+                self.reservations.dispatch(reservation_id)
+            except Exception:
+                self.repository.save_query(replace(
+                    query, status=QueryStatus.FAILED,
+                    completed_at=datetime.now(timezone.utc),
+                    error_summary="budget_dispatch_failed",
+                ))
+                raise
         candidate_ids: list[str] = []
         promoted_ids: list[str] = []
         promoted_domains: set[str] = set()
@@ -286,6 +310,15 @@ class DiscoveryRunner:
                                 }},
                             ))
         except Exception as error:
+            if reservation_id is not None:
+                uncertain = (isinstance(error, SearchProviderError) and
+                             error.code in {"timeout", "network_failure"})
+                raw_code = (error.code if isinstance(error, SearchProviderError)
+                            else type(error).__name__)
+                budget_code = re.sub(r"[^A-Z0-9_]", "_", raw_code.upper())[:80] or "SEARCH_FAILURE"
+                self.reservations.finish(
+                    reservation_id, status="UNKNOWN" if uncertain else "FAILED",
+                    error_code=budget_code)
             self.repository.save_query(replace(
                 query, status=QueryStatus.FAILED,
                 completed_at=datetime.now(timezone.utc), result_count=result_count,
@@ -299,6 +332,8 @@ class DiscoveryRunner:
             completed_at=datetime.now(timezone.utc), result_count=result_count,
             candidate_count=len(candidate_ids), promoted_count=len(promoted_ids),
         ))
+        if reservation_id is not None:
+            self.reservations.finish(reservation_id, status="SUCCEEDED")
         return DiscoveryOutcome(query, tuple(candidate_ids), tuple(promoted_ids),
                                 approved_count, review_count, rejected_count,
                                 scheduled_count, tuple(approval_failures))

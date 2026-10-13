@@ -36,6 +36,7 @@ class RuntimeConfigTests(unittest.TestCase):
         })
         runner = runtime.discovery_runner(provider, repository=InMemoryDiscoveryRepository())
         self.assertEqual((runner.policy.max_results, runner.gate.threshold), (1, 0.90))
+        self.assertIsNotNone(runner.quality_evaluator)
 
     def test_agent_credentials_override_backend_credentials(self) -> None:
         config = resolve_supabase_config({

@@ -15,6 +15,7 @@ from agent_collect.discovery.models import (
     SourceCandidate, SourceCandidateStatus, SourceEvaluation,
 )
 from agent_collect.discovery.providers import SearchProvider, SearchProviderError, SearchRequestPolicy
+from agent_collect.discovery.quality import SearchQualityEvaluator, listing_followup_plan
 from agent_collect.collectors.security import UnsafeTargetError, validate_target_url
 from agent_collect.registry.approval import source_is_collectible
 from agent_collect.registry.service import SourceRegistryService, canonicalize_url
@@ -102,6 +103,8 @@ class DiscoveryRunner:
         auto_assessor: AutoApprovalAssessor | None = None,
         auto_executor: AutoApprovalExecutor | None = None,
         reservations: BudgetReservations | None = None,
+        candidate_provenance: dict[str, object] | None = None,
+        quality_evaluator: SearchQualityEvaluator | None = None,
     ) -> None:
         self.provider = provider
         self.repository = repository
@@ -115,6 +118,8 @@ class DiscoveryRunner:
             raise ValueError("auto approval requires both assessment and audited transition")
         self.budget_guard = budget_guard
         self.reservations = reservations
+        self.candidate_provenance = dict(candidate_provenance or {})
+        self.quality_evaluator = quality_evaluator
         self.auto_assessor, self.auto_executor = auto_assessor, auto_executor
 
     def run(self, query: DiscoveryQuery) -> DiscoveryOutcome:
@@ -193,6 +198,15 @@ class DiscoveryRunner:
                             else SearchResultStatus.FILTERED),
                     filter_reasons=decision.reasons,
                 )
+                if self.quality_evaluator is not None:
+                    assessment = self.quality_evaluator.assess(
+                        result, now=datetime.now(timezone.utc))
+                    followup = listing_followup_plan(result, assessment)
+                    result = replace(result, provider_metadata={
+                        **result.provider_metadata,
+                        "quality": assessment.audit_record(candidate_persisted=None),
+                        **({"quality_followup_plan": followup} if followup else {}),
+                    })
                 self.repository.save_result(result)
                 if not decision.accepted:
                     continue
@@ -206,7 +220,8 @@ class DiscoveryRunner:
                     provenance={"provider": result.provider, "rank": result.rank,
                                 "query_text": query.text,
                                 "query_vertical": query.vertical_hint.value,
-                                "query_vertical_is_approval": False},
+                                "query_vertical_is_approval": False,
+                                **self.candidate_provenance},
                 )
                 self.repository.save_candidate(candidate)
                 candidate_ids.append(str(candidate.id))

@@ -10,16 +10,24 @@ from zoneinfo import ZoneInfo
 
 from agent_collect.discovery.budget import SearchBudgetPolicy, normalize_query
 from agent_collect.discovery.models import DiscoveryQuery
+from agent_collect.discovery.quality import QualityClass
 from agent_collect.discovery.planner import AutonomousDiscoveryPlanner
 from agent_collect.discovery.scheduling import DiscoverySchedule
 from agent_collect.schemas.models import Vertical
 
 
 SERVICE_GOAL = (
-    "Discover AI opportunities held in South Korea or open to Korean participants: "
-    "education, competitions, hackathons, conferences, exhibitions, research, "
-    "government or business support, and participant recruitment. Prioritize "
-    "currently open or soon-opening opportunities. Explore related new areas."
+    "Continuously discover individual AI recruitment notices for events in South Korea "
+    "or open to Korean participants. Prioritize applications open now, then applications "
+    "opening soon, officially announced future events, and emerging AI opportunities. "
+    "Cover education, competitions, hackathons, conferences, industrial exhibitions, "
+    "research, and public or business support. Generate your own Korean and English "
+    "queries, balancing broad exploration with targeted searches for organizer notices. "
+    "Use the current date, official organizers, application windows, past yield, duplicate "
+    "rate, and unexplored categories. News and recaps are leads, not verified individual "
+    "opportunities. If an official listing is found, plan a separate search for its individual "
+    "notices without collecting the listing. Do not invent application dates or permanently "
+    "exclude a category because recent yield was low."
 )
 KST = ZoneInfo("Asia/Seoul")
 MAX_QUERIES = 3
@@ -31,8 +39,9 @@ _UNSAFE_QUERY = re.compile(
 )
 _DOMAIN = re.compile(r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b", re.IGNORECASE)
 _INSTRUCTION = re.compile(
-    r"(?:ignore (?:all )?(?:previous|prior) instructions|reveal (?:the )?(?:secret|key)|"
-    r"system prompt|developer message|이전 지시.*무시|비밀.*(?:공개|출력))",
+    r"(?:(?:ignore|disregard|forget|override).{0,40}(?:instructions?|rules?|prompts?)|"
+    r"reveal (?:the )?(?:secret|key)|system prompt|developer message|"
+    r"이전 지시.*무시|비밀.*(?:공개|출력)|시스템.*(?:지시|프롬프트).*(?:무시|공개))",
     re.IGNORECASE,
 )
 
@@ -49,6 +58,7 @@ class PlanningContext:
     monthly_tavily_usage: int
     recent_result_filters: tuple[tuple[str, ...], ...] = ()
     scheduled_source_ids: tuple[str, ...] = ()
+    recent_quality_audits: tuple[dict[str, object], ...] = ()
 
     def prompt_data(self) -> dict[str, Any]:
         local = self.at.astimezone(KST)
@@ -59,7 +69,10 @@ class PlanningContext:
                                          {"searches": 0, "results": 0, "candidates": 0})
             row["searches"] += 1
             row["results"] += query.result_count
-            row["candidates"] += query.candidate_count
+            if query.provenance.get("execution_mode") == "SEARCH_ONLY":
+                row["evaluated_urls"] = row.get("evaluated_urls", 0) + query.candidate_count
+            else:
+                row["candidates"] += query.candidate_count
         duplicates = sum(any(reason in {"existing_candidate", "existing_source",
                                              "duplicate_url_in_query"} for reason in reasons)
                          for reasons in self.recent_result_filters)
@@ -76,19 +89,72 @@ class PlanningContext:
             if row.get("promoted_source_id") in connected:
                 by_category[category]["collection_connected"] = (
                     by_category[category].get("collection_connected", 0) + 1)
+        quality_by_category: dict[str, dict[str, int]] = {}
+        official_count = duplicate_count = verified_count = listing_count = 0
+        for row in self.recent_quality_audits:
+            if not isinstance(row, dict):
+                continue
+            category = row.get("category")
+            if not isinstance(category, str) or category not in {item.value for item in Vertical}:
+                category = Vertical.UNKNOWN.value
+            classification = row.get("classification")
+            if not isinstance(classification, str) or classification not in {item.value for item in QualityClass}:
+                classification = QualityClass.UNVERIFIED.value
+            stats = quality_by_category.setdefault(category, {"results": 0,
+                "verified_new": 0, "official": 0, "duplicates": 0,
+                "listing_followups": 0, "unverified": 0})
+            stats["results"] += 1
+            if classification == QualityClass.UNVERIFIED.value:
+                stats["unverified"] += 1
+            if row.get("official_source") is True:
+                official_count += 1
+                stats["official"] += 1
+            if classification == QualityClass.DUPLICATE.value:
+                duplicate_count += 1
+                stats["duplicates"] += 1
+            if (classification in {QualityClass.ACTIVE_OPPORTUNITY.value,
+                                   QualityClass.UPCOMING_OPPORTUNITY.value} and
+                    row.get("verified_new_opportunity") is True and
+                    row.get("evidence_verified") is True and
+                    row.get("official_source") is True and
+                    row.get("individual_opportunity") is True and
+                    row.get("confidence") == "VERIFIED"):
+                verified_count += 1
+                stats["verified_new"] += 1
+            if classification == QualityClass.OFFICIAL_LISTING_PAGE.value:
+                listing_count += 1
+                stats["listing_followups"] += 1
+        quality_total = sum(row["results"] for row in quality_by_category.values())
+        safe_recent = [q for q in reversed(completed)
+                       if len(q.text) <= 120 and not _UNSAFE_QUERY.search(q.text)
+                       and not _DOMAIN.search(q.text) and not _INSTRUCTION.search(q.text)
+                       and not any(ord(char) < 32 for char in q.text)]
         # Search results and Source text are untrusted. Only bounded aggregate
-        # data and domains cross the LLM boundary; no HTML/snippets/titles.
+        # data and validated past query text cross the LLM boundary.
         return {
             "kst_time": local.isoformat(), "years": [local.year, local.year + 1],
             "recent_searches": [
                 {"query": q.text[:120], "category": q.vertical_hint.value,
-                 "result_count": q.result_count, "candidate_count": q.candidate_count}
-                for q in completed[:30]],
+                 "result_count": q.result_count,
+                 "source_candidates_registered": (0 if q.provenance.get("execution_mode") == "SEARCH_ONLY"
+                                                   else q.candidate_count),
+                 "evaluated_urls": q.candidate_count}
+                for q in safe_recent[:30]],
             "category_performance": by_category,
+            "quality_by_category": quality_by_category,
+            "quality_sample_size": quality_total,
+            "valid_opportunity_yield": round(verified_count / quality_total, 3) if quality_total else 0.0,
+            "official_source_ratio": round(official_count / quality_total, 3) if quality_total else 0.0,
+            "quality_duplicate_ratio": round(duplicate_count / quality_total, 3) if quality_total else 0.0,
+            "official_listing_followup_count": listing_count,
+            "unexplored_categories": [item.value for item in Vertical
+                                      if item is not Vertical.UNKNOWN and
+                                      by_category.get(item.value, {}).get("searches", 0) == 0],
             "recent_candidate_count": len(self.recent_candidates),
             "duplicate_result_ratio": round(duplicates / max(1, len(self.recent_result_filters)), 3),
             "source_domains": list(self.source_domains[:30]),
-            "recent_failure_codes": list(self.failure_codes[:20]),
+            "recent_failure_codes": [code for code in self.failure_codes[:20]
+                                     if re.fullmatch(r"[A-Z][A-Z0-9_]{0,79}", code)],
             "remaining_tavily_day": max(0, 30 - self.daily_tavily_usage),
             "remaining_tavily_month": max(0, 1000 - self.monthly_tavily_usage),
         }

@@ -2,6 +2,10 @@
 **
 !/agent_collect/
 !/agent_collect/**
+!/opportunity_status/
+/opportunity_status/*
+!/opportunity_status/__init__.py
+!/opportunity_status/evidence.py
 !/Dockerfile.agent
 !/requirements.agent.txt
 !/.dockerignore

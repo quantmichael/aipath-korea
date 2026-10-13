@@ -12,7 +12,7 @@ from agent_collect.adapters.service_db.adapter import SupabaseServiceDBAdapter
 from agent_collect.automation.runtime import AutomationRuntime
 from agent_collect.config.settings import load_settings
 from agent_collect.publishing.worker import PublishClaim, PublishJob, PublishWorker
-from test_agent_collect_service_publish import FakeLedger, FakeTables, candidate
+from tests.test_agent_collect_service_publish import FakeLedger, FakeTables, candidate
 
 
 class FakeJobs:

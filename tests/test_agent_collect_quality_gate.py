@@ -239,6 +239,38 @@ class FakeServiceLookup:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_recruitment_expiry_and_date_only_never_enqueue(self):
+        row, candidate, source, raw = fixture()
+        row = replace(row, status=ExtractionStatus.EXTRACTED)
+        sources, docs = InMemorySourceRepository(), InMemoryRawDocumentRepository()
+        sources.save(source)
+        docs.save(raw)
+        quality = InMemoryQualityRepository([row])
+        quality.normalized_event_times[row.id] = (candidate.event_start_at, candidate.event_end_at)
+        quality.temporal_metadata[row.id] = ("DATETIME_CONFIRMED", "CONFIRMED")
+        quality.normalized_registration_times[row.id] = (
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+        quality.application_temporal_metadata[row.id] = ("DATETIME_CONFIRMED", "CONFIRMED")
+        runner = QualityGateRunner(sources=sources, documents=docs, quality=quality,
+                                   service_duplicates=FakeServiceLookup(),
+                                   settings=load_settings(environ={}))
+        expired = runner.run(row.id)
+        self.assertEqual(expired.decision.status, GateStatus.REVIEW_REQUIRED)
+        self.assertIn("RECRUITMENT_EXPIRED", expired.verification.reasons)
+        self.assertFalse(expired.queued)
+
+        quality.normalized_registration_times[row.id] = (None, None)
+        quality.application_temporal_metadata[row.id] = ("DATE_ONLY", "UNKNOWN")
+        quality.normalization_diagnostics[row.id] = {
+            "status": "REVIEW_REQUIRED", "application_time_kind": "DATE_ONLY",
+        }
+        date_only = runner.run(row.id)
+        self.assertEqual(date_only.decision.status, GateStatus.REVIEW_REQUIRED)
+        self.assertIn("RECRUITMENT_TIME_UNCONFIRMED", date_only.verification.reasons)
+        self.assertFalse(date_only.queued)
+
     def test_ready_queue_idempotency_and_review_not_queued(self):
         row, candidate, source, raw = fixture()
         sources, docs = InMemorySourceRepository(), InMemoryRawDocumentRepository()
@@ -259,8 +291,11 @@ class RunnerTests(unittest.TestCase):
                       quality.verifications[0].value.checks["normalization"]["reason_codes"])
         self.assertEqual(len(quality.queue), 0)
         self.assertEqual(lookup.calls, 1)
+        self.assertIn("EXTRACTION_REVIEW_REQUIRED", result.verification.reasons)
 
-        # Explicitly normalized date is sufficient for the queue branch.
+        # A reviewed extraction cannot become ready. Use a separately
+        # successful extraction for the explicitly normalized queue branch.
+        quality.rows[row.id] = replace(row, status=ExtractionStatus.EXTRACTED)
         quality.normalized_event_times[row.id] = (candidate.event_start_at, candidate.event_end_at)
         quality.temporal_metadata[row.id] = ("DATETIME_CONFIRMED", "CONFIRMED")
         quality.normalized_registration_times[row.id] = (

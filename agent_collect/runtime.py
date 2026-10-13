@@ -31,6 +31,11 @@ from agent_collect.discovery.scheduling_supabase import SupabaseDiscoverySchedul
 from agent_collect.discovery.models import DiscoveryQuery
 from agent_collect.schemas.models import Vertical
 from agent_collect.discovery.runner import DiscoveryRunner, PromotionGate
+from agent_collect.discovery.quality import SearchQualityEvaluator
+from agent_collect.discovery.evidence_supabase import (
+    SupabaseEvidenceIntegration, SupabasePreGateEvidence,
+)
+from agent_collect.discovery.search_only import SearchOnlyDiscoveryRunner
 from agent_collect.budget.reservations import SupabaseBudgetReservations
 from agent_collect.extraction.providers import ExtractionProvider
 from agent_collect.extraction.providers import OpenAIExtractionProvider
@@ -139,6 +144,13 @@ class AgentRuntime:
             )
         return LocalRawContentStorage(raw_dir, retention_days=self.settings.raw_retention_days)
 
+    def evidence_integration(self, raw_dir: Path) -> SupabaseEvidenceIntegration:
+        """Assemble explicit, read-only PHASE 12J evidence inspection."""
+        client = getattr(self.sources, "client", None)
+        if client is None:
+            raise RuntimeError("Evidence integration requires an Agent Supabase client")
+        return SupabaseEvidenceIntegration(client, self.raw_storage(raw_dir))
+
     def collection_schedule_policy(self) -> CollectionSchedulePolicy:
         return CollectionSchedulePolicy(
             self.settings.collection_default_interval_minutes,
@@ -187,14 +199,16 @@ class AgentRuntime:
             storage=self.raw_storage(raw_dir),
             extractor=self.extraction_runner(provider, raw_dir),
             normalizer=self.normalization_runner(),
-            quality_gate=self.quality_gate_runner(),
+            quality_gate=self.quality_gate_runner(require_official_evidence=True,
+                                                  raw_dir=raw_dir),
             policy=self.processing_policy(), worker_id=worker_id,
         )
 
     def discovery_runner(
         self, provider: SearchProvider, *, repository: DiscoveryRepository | None = None,
+        search_only: bool = False,
     ) -> DiscoveryRunner:
-        """Assemble manual Discovery; no search is executed by construction."""
+        """Assemble Discovery without running it; search_only has no Source write path."""
         if not self.settings.discovery_enabled and provider.name != "tavily":
             raise RuntimeError("Discovery feature flag is disabled")
         if self.settings.discovery_search_provider and provider.name != self.settings.discovery_search_provider:
@@ -204,9 +218,11 @@ class AgentRuntime:
             if client is None:
                 raise RuntimeError("Discovery repository or Supabase client required")
             repository = SupabaseDiscoveryRepository(client)
-        registry = SourceRegistryService(self.sources)
+        if search_only and provider.name != "tavily":
+            raise ValueError("search-only execution requires Tavily")
+        registry = None if search_only else SourceRegistryService(self.sources)
         auto_assessor = auto_executor = None
-        if self.settings.discovery_auto_approval_enabled:
+        if self.settings.discovery_auto_approval_enabled and not search_only:
             client = getattr(self.sources, "client", None)
             if client is None:
                 raise RuntimeError("auto approval requires audited Supabase Source review")
@@ -235,23 +251,34 @@ class AgentRuntime:
                 ), provider_enabled=self.settings.discovery_enabled,
                 credential_present=isinstance(provider, TavilySearchProvider) and provider.credential_present,
             )
+        evaluator = RuleBasedEvaluator(
+            official_domain_hints=self.settings.discovery_official_domain_hints,
+        )
+        policy = SearchRequestPolicy(
+            max_results=self.settings.discovery_max_results,
+            timeout_seconds=self.settings.discovery_request_timeout_seconds,
+        )
+        reservations = (SupabaseBudgetReservations(getattr(self.sources, "client"))
+                        if provider.name == "tavily" and
+                        getattr(self.sources, "client", None) is not None
+                        else None)
+        if search_only:
+            return SearchOnlyDiscoveryRunner(
+                provider=provider, repository=repository,
+                find_source=self.sources.find_by_canonical_url,
+                evaluator=evaluator, budget_guard=budget_guard,
+                reservations=reservations, policy=policy,
+            )
         return DiscoveryRunner(
             provider=provider, repository=repository, registry=registry,
-            evaluator=RuleBasedEvaluator(
-                official_domain_hints=self.settings.discovery_official_domain_hints,
-            ),
+            evaluator=evaluator,
             gate=PromotionGate(registry, threshold=self.settings.discovery_promotion_threshold),
-            policy=SearchRequestPolicy(
-                max_results=self.settings.discovery_max_results,
-                timeout_seconds=self.settings.discovery_request_timeout_seconds,
-            ),
+            policy=policy,
             budget_guard=budget_guard,
             auto_assessor=auto_assessor,
             auto_executor=auto_executor,
-            reservations=(SupabaseBudgetReservations(getattr(self.sources, "client"))
-                          if provider.name == "tavily" and
-                          getattr(self.sources, "client", None) is not None
-                          else None),
+            reservations=reservations,
+            quality_evaluator=SearchQualityEvaluator(),
         )
 
     def discovery_worker(self, *, worker_id: str) -> DiscoveryWorker:
@@ -363,16 +390,21 @@ class AgentRuntime:
             repository=repository, provider=provider, settings=self.settings,
         )
 
-    def quality_gate_runner(self) -> QualityGateRunner:
+    def quality_gate_runner(self, *, require_official_evidence: bool = True,
+                            raw_dir: Path | None = None) -> QualityGateRunner:
         """Assemble a manual Agent quality run; Service access is SELECT-only."""
         client = getattr(self.sources, "client", None)
         if client is None:
             raise RuntimeError("Quality Gate requires an Agent Supabase client")
+        assessor = (SupabasePreGateEvidence(client, self.raw_storage(raw_dir))
+                    if require_official_evidence and raw_dir is not None else None)
         return QualityGateRunner(
             sources=self.sources, documents=self.documents,
             quality=SupabaseQualityRepository(client),
             service_duplicates=SupabaseServiceDuplicateLookup(client),
             settings=self.settings,
+            evidence_assessor=assessor,
+            require_official_evidence=require_official_evidence,
         )
 
     def normalization_runner(self) -> NormalizationRunner:

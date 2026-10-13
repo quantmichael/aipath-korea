@@ -4,10 +4,8 @@ from collect.models import PromotionResult
 from collect.repository import (
     create_supabase_client,
     fetch_promotable_candidates,
-    mark_candidate_promoted,
-    upsert_draft_opportunity,
+    register_candidate_opportunity,
 )
-from opportunity_status.evidence import build_collect_evidence
 
 
 def promote_candidates(
@@ -34,7 +32,8 @@ def promote_candidates(
                 )
                 continue
 
-            opportunity_id, disposition = upsert_draft_opportunity(supabase, candidate)
+            opportunity_id, disposition = register_candidate_opportunity(
+                supabase, candidate, publish=False)
             if not opportunity_id:
                 raise RuntimeError("Opportunity write returned no ID")
             if disposition == "protected_existing":
@@ -43,12 +42,6 @@ def promote_candidates(
                     f"{candidate['id']}: existing non-draft Opportunity protected"
                 )
                 continue
-            supabase.rpc(
-                "record_opportunity_status_evidence",
-                {"p_opportunity_id": opportunity_id,
-                 "p_evidence": build_collect_evidence(candidate)},
-            ).execute()
-            mark_candidate_promoted(supabase, candidate["id"])
             result.promoted_count += 1
             result.promoted_candidates.append(candidate["id"])
 

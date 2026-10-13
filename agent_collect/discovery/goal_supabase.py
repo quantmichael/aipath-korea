@@ -38,7 +38,7 @@ class SupabaseGoalContext:
                           .select("status,query_id,promoted_source_id").order("created_at", desc=True)
                           .limit(100).execute().data or [])
         result_rows = (self.client.table("agent_search_results")
-                       .select("filter_reasons").order("created_at", desc=True)
+                       .select("query_id,filter_reasons,provider_metadata").order("created_at", desc=True)
                        .limit(100).execute().data or [])
         schedule_rows = (self.client.table("agent_source_schedules")
                          .select("source_id").order("updated_at", desc=True)
@@ -57,12 +57,29 @@ class SupabaseGoalContext:
                            for row in candidate_rows if isinstance(row, dict))
         filters = tuple(tuple(str(reason) for reason in row.get("filter_reasons") or [])
                         for row in result_rows if isinstance(row, dict))
+        quality_rows = []
+        for row in result_rows:
+            if not isinstance(row, dict):
+                continue
+            metadata = row.get("provider_metadata")
+            audit = metadata.get("quality") if isinstance(metadata, dict) else None
+            audit = audit if isinstance(audit, dict) else {}
+            quality_rows.append({
+                "category": categories.get(str(row.get("query_id")), "unknown"),
+                "classification": audit.get("classification"),
+                "official_source": audit.get("official_source"),
+                "individual_opportunity": audit.get("individual_opportunity"),
+                "confidence": audit.get("confidence"),
+                "verified_new_opportunity": audit.get("verified_new_opportunity"),
+                "evidence_verified": audit.get("evidence_verified"),
+            })
+        quality = tuple(quality_rows)
         connected = tuple(str(row["source_id"]) for row in schedule_rows
                           if isinstance(row, dict) and row.get("source_id"))
         failures = tuple(str(row.error_summary)[:80] for row in recent
                          if row.status is QueryStatus.FAILED and row.error_summary)[:20]
         return PlanningContext(now, recent, schedules, candidates, domains, failures,
-                               usage["daily"], usage["monthly"], filters, connected)
+                               usage["daily"], usage["monthly"], filters, connected, quality)
 
 
 class SupabaseGoalPlans:
@@ -94,6 +111,14 @@ class SupabaseGoalPlans:
         rows = self.client.rpc("agent_claim_ai_plan_query", {
             "p_claim_id": str(claim_id),
         }).execute().data or []
+        return rows[0] if rows else None
+
+    def claim_query_exact(self, plan_id: UUID, claim_id: UUID) -> dict[str, Any] | None:
+        rows = self.client.rpc("agent_claim_ai_plan_query_exact", {
+            "p_plan_id": str(plan_id), "p_claim_id": str(claim_id),
+        }).execute().data or []
+        if len(rows) > 1:
+            raise RuntimeError("exact plan claim returned multiple queries")
         return rows[0] if rows else None
 
     def finish_query(self, claim_id: UUID, *, status: str,
@@ -165,16 +190,20 @@ class GoalExecutionWorker:
     """Claims one stored plan item and invokes the existing DiscoveryRunner."""
 
     def __init__(self, *, plans: SupabaseGoalPlans, runner: DiscoveryRunner,
-                 enabled: bool) -> None:
+                 enabled: bool, plan_id: UUID | None = None) -> None:
         self.plans, self.runner, self.enabled = plans, runner, enabled
+        self.plan_id = plan_id
 
     def run_once(self, *, dry_run: bool = False) -> dict[str, Any]:
         if not self.enabled or dry_run:
             return {"status": "DISABLED" if not self.enabled else "DRY_RUN", "executed_query_count": 0}
         claim_id = uuid4()
-        row = self.plans.claim_query(claim_id)
+        row = (self.plans.claim_query_exact(self.plan_id, claim_id)
+               if self.plan_id is not None else self.plans.claim_query(claim_id))
         if row is None:
             return {"status": "EMPTY", "executed_query_count": 0}
+        if self.plan_id is not None and row.get("plan_id") != str(self.plan_id):
+            raise RuntimeError("exact plan claim returned a different plan")
         query = DiscoveryQuery(
             id=UUID(row["id"]), text=row["query_text"], provider="tavily",
             created_at=datetime.now(timezone.utc),

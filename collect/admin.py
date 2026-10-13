@@ -5,12 +5,9 @@ from collect.repository import (
     create_supabase_client,
     fetch_candidate_review_rows,
     fetch_candidates_by_ids,
-    mark_candidate_promoted,
-    publish_opportunity,
+    register_candidate_opportunity,
     update_candidate_statuses,
-    upsert_draft_opportunity,
 )
-from opportunity_status.evidence import build_collect_evidence
 
 
 def list_review_candidates(
@@ -96,7 +93,8 @@ def _publish_candidates(supabase, candidate_ids: list[str]) -> PromotionResult:
                 )
                 continue
 
-            opportunity_id, disposition = upsert_draft_opportunity(supabase, candidate)
+            opportunity_id, disposition = register_candidate_opportunity(
+                supabase, candidate, publish=True)
             if not opportunity_id:
                 result.failed_count += 1
                 result.errors.append(f"{candidate['id']}: opportunity save failed")
@@ -108,13 +106,6 @@ def _publish_candidates(supabase, candidate_ids: list[str]) -> PromotionResult:
                 )
                 continue
 
-            supabase.rpc(
-                "record_opportunity_status_evidence",
-                {"p_opportunity_id": opportunity_id,
-                 "p_evidence": build_collect_evidence(candidate)},
-            ).execute()
-            publish_opportunity(supabase, opportunity_id)
-            mark_candidate_promoted(supabase, candidate["id"])
             result.promoted_count += 1
             result.promoted_candidates.append(candidate["id"])
 

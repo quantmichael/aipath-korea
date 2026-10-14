@@ -9,6 +9,7 @@ from supabase import Client, create_client
 
 from collect.models import CollectionRunSummary, OpportunityCandidate, Source
 from runtime_access import require_collect_write_access
+from opportunity_status.evidence import build_collect_evidence, normalized_collect_candidate
 
 load_dotenv()
 
@@ -367,6 +368,30 @@ def upsert_draft_opportunity(
     response = supabase.table("opportunities").insert(record).execute()
     data = response.data or []
     return (data[0]["id"] if data else "", "inserted")
+
+
+def register_candidate_opportunity(
+    supabase: Client, candidate: dict[str, Any], *, publish: bool
+) -> tuple[str, str]:
+    """Persist Opportunity, validated evidence, and candidate state atomically.
+
+    Requires the separately staged registration RPC. A missing RPC fails
+    closed; there is deliberately no multi-request write fallback.
+    """
+    normalized = normalized_collect_candidate(candidate)
+    response = supabase.rpc("register_opportunity_with_evidence", {
+        "p_record": _candidate_to_opportunity_record(normalized),
+        "p_evidence": build_collect_evidence(normalized),
+        "p_candidate_id": candidate["id"],
+        "p_publish": publish,
+    }).execute()
+    rows = response.data or []
+    if len(rows) != 1 or not rows[0].get("opportunity_id"):
+        raise RuntimeError("atomic Opportunity registration returned no ID")
+    disposition = rows[0].get("disposition")
+    if disposition not in {"registered", "protected_existing"}:
+        raise RuntimeError("atomic Opportunity registration returned an invalid outcome")
+    return rows[0]["opportunity_id"], disposition
 
 
 def publish_opportunity(

@@ -8,7 +8,7 @@ path, may establish a boundary. This module performs no database I/O.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 FIELDS = (
@@ -21,6 +21,31 @@ OFFSET_DATETIME = re.compile(
     r"T[0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
 )
 DATE_ONLY = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+
+
+def normalized_collect_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Encode calendar dates as UTC storage placeholders, never source clocks.
+
+    Migration 002 validates DATE_ONLY against this UTC calendar date and uses
+    source_date for the actual Asia/Seoul boundary. Ambiguous clock values are
+    withheld from the Service row; their original text remains in raw_payload.
+    """
+    normalized = dict(candidate)
+    for field in FIELDS:
+        value = candidate.get(field)
+        if isinstance(value, str) and DATE_ONLY.fullmatch(value):
+            try:
+                date.fromisoformat(value)
+            except ValueError:
+                normalized[field] = None
+            else:
+                normalized[field] = f"{value}T00:00:00+00:00"
+        elif value is not None:
+            instant = _instant(value)
+            normalized[field] = (
+                instant.astimezone(timezone.utc).isoformat() if instant else None
+            )
+    return normalized
 
 
 def _instant(value: Any) -> datetime | None:

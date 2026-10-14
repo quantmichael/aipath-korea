@@ -5,11 +5,41 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from opportunity_status.evidence import build_agent_evidence, build_collect_evidence
+from opportunity_status.evidence import (
+    build_agent_evidence, build_collect_evidence, normalized_collect_candidate,
+)
 from opportunity_status.simulation import target_status, transition_decision
 
 
 class TimeEvidenceTests(unittest.TestCase):
+    def test_collect_calendar_date_has_utc_placeholder_and_kst_policy(self):
+        candidate = {"id": "c", "application_deadline_at": "2026-10-06",
+                     "raw_payload": {"collector": "api",
+                                     "row": {"reqstEndDe": "2026-10-06"}}}
+        normalized = normalized_collect_candidate(candidate)
+        self.assertEqual(normalized["application_deadline_at"],
+                         "2026-10-06T00:00:00+00:00")
+        self.assertEqual(build_collect_evidence(normalized)["application_deadline"],
+                         {"precision": "DATE_ONLY", "source_date": "2026-10-06",
+                          "source_ref": "api"})
+        self.assertEqual(candidate["application_deadline_at"], "2026-10-06")
+
+    def test_collect_ambiguous_clock_is_not_promoted(self):
+        candidate = {"id": "c", "application_deadline_at": "2026-10-06T17:00:00",
+                     "raw_payload": {"status_time_evidence": {
+                         "application_deadline_at": {
+                             "source_literal": "2026-10-06T17:00:00",
+                             "source_ref": "official"}}}}
+        normalized = normalized_collect_candidate(candidate)
+        self.assertIsNone(normalized["application_deadline_at"])
+        self.assertEqual(build_collect_evidence(normalized)["application_deadline"]["precision"],
+                         "UNKNOWN")
+
+    def test_collect_aware_instant_is_encoded_in_utc(self):
+        candidate = {"application_deadline_at": "2026-10-06T17:00:00+09:00"}
+        self.assertEqual(normalized_collect_candidate(candidate)["application_deadline_at"],
+                         "2026-10-06T08:00:00+00:00")
+
     def test_bizinfo_raw_calendar_date_is_policy_date_not_exact_time(self):
         candidate = {
             "id": "candidate-1",
@@ -194,17 +224,15 @@ class CollectPromotionEvidenceTests(unittest.TestCase):
         client = MagicMock()
         with patch.object(promote, "create_supabase_client", return_value=client), \
              patch.object(promote, "fetch_promotable_candidates", return_value=[candidate]), \
-             patch.object(promote, "upsert_draft_opportunity",
-                          return_value=("opportunity-1", "protected_existing")), \
-             patch.object(promote, "mark_candidate_promoted") as mark:
+             patch.object(promote, "register_candidate_opportunity",
+                          return_value=("opportunity-1", "protected_existing")):
             result = promote.promote_candidates()
         self.assertEqual(result.skipped_count, 1)
         self.assertEqual(result.failed_count, 0)
         client.rpc.assert_not_called()
-        mark.assert_not_called()
 
     def test_public_row_and_data_survive_evidence_rpc_outage(self):
-        from collect import promote, repository
+        from collect import promote
         original = {"id": "opportunity-1", "status": "open", "title": "Published title",
                     "application_deadline_at": "2026-10-10T00:00:00+00:00"}
         candidate = {"id": "candidate-1", "source_id": "source-1", "category_id": "category-1",
@@ -213,20 +241,15 @@ class CollectPromotionEvidenceTests(unittest.TestCase):
         client = MagicMock()
         client.rpc.side_effect = RuntimeError("RPC unavailable")
         with patch.object(promote, "create_supabase_client", return_value=client), \
-             patch.object(promote, "fetch_promotable_candidates", return_value=[candidate]), \
-             patch.object(repository, "find_existing_opportunity_for_record",
-                          return_value=original), \
-             patch.object(promote, "mark_candidate_promoted") as mark:
+             patch.object(promote, "fetch_promotable_candidates", return_value=[candidate]):
             result = promote.promote_candidates()
-        self.assertEqual(result.skipped_count, 1)
-        self.assertEqual(result.failed_count, 0)
+        self.assertEqual(result.failed_count, 1)
         self.assertEqual(original["status"], "open")
         self.assertEqual(original["title"], "Published title")
         client.table.assert_not_called()
-        client.rpc.assert_not_called()
-        mark.assert_not_called()
+        client.rpc.assert_called_once()
 
-    def test_promotion_registers_evidence_before_marking_candidate(self):
+    def test_promotion_uses_atomic_registration_with_date_only_evidence(self):
         from collect import promote
         candidate = {"id": "candidate-1", "source_id": "source-1", "category_id": "category-1",
                      "title": "Test", "slug": "test", "official_url": "https://example.org/test",
@@ -234,17 +257,17 @@ class CollectPromotionEvidenceTests(unittest.TestCase):
                      "raw_payload": {"collector": "api", "row": {
                          "reqstBeginEndDe": "2026-09-08 ~ 2026-10-06"}}}
         client = MagicMock()
-        calls = []
-        client.rpc.side_effect = lambda name, args: (calls.append((name, args)) or client)
+        client.rpc.return_value.execute.return_value.data = [
+            {"opportunity_id": "opportunity-1", "disposition": "registered"}]
         with patch.object(promote, "create_supabase_client", return_value=client), \
-             patch.object(promote, "fetch_promotable_candidates", return_value=[candidate]), \
-             patch.object(promote, "upsert_draft_opportunity", return_value=("opportunity-1", "inserted")), \
-             patch.object(promote, "mark_candidate_promoted", side_effect=lambda *_: calls.append("promoted")):
+             patch.object(promote, "fetch_promotable_candidates", return_value=[candidate]):
             result = promote.promote_candidates()
         self.assertEqual(result.promoted_count, 1)
-        self.assertEqual(calls[0][0], "record_opportunity_status_evidence")
-        self.assertEqual(calls[0][1]["p_evidence"]["application_deadline"]["precision"], "DATE_ONLY")
-        self.assertEqual(calls[1], "promoted")
+        name, args = client.rpc.call_args.args
+        self.assertEqual(name, "register_opportunity_with_evidence")
+        self.assertFalse(args["p_publish"])
+        self.assertEqual(args["p_evidence"]["application_deadline"]["precision"], "DATE_ONLY")
+        client.table.assert_not_called()
 
     def test_rpc_failure_leaves_candidate_unpromoted(self):
         from collect import promote
@@ -253,14 +276,12 @@ class CollectPromotionEvidenceTests(unittest.TestCase):
         client = MagicMock()
         client.rpc.return_value.execute.side_effect = RuntimeError("RPC unavailable")
         with patch.object(promote, "create_supabase_client", return_value=client), \
-             patch.object(promote, "fetch_promotable_candidates", return_value=[candidate]), \
-             patch.object(promote, "upsert_draft_opportunity", return_value=("opportunity-1", "inserted")), \
-             patch.object(promote, "mark_candidate_promoted") as mark:
+             patch.object(promote, "fetch_promotable_candidates", return_value=[candidate]):
             result = promote.promote_candidates()
         self.assertEqual(result.failed_count, 1)
-        mark.assert_not_called()
+        client.table.assert_not_called()
 
-    def test_existing_admin_publish_records_evidence_before_open(self):
+    def test_admin_publish_is_atomic_with_evidence(self):
         from collect import admin
         candidate = {"id": "candidate-1", "source_id": "source-1", "category_id": "category-1",
                      "title": "Test", "slug": "test", "official_url": "https://example.org/test",
@@ -268,16 +289,16 @@ class CollectPromotionEvidenceTests(unittest.TestCase):
                      "raw_payload": {"collector": "api", "row": {
                          "reqstBeginEndDe": "2026-09-08 ~ 2026-10-06"}}}
         client = MagicMock()
-        calls = []
-        client.rpc.side_effect = lambda name, args: (calls.append((name, args)) or client)
-        with patch.object(admin, "fetch_candidates_by_ids", return_value=[candidate]), \
-             patch.object(admin, "upsert_draft_opportunity", return_value=("opportunity-1", "inserted")), \
-             patch.object(admin, "publish_opportunity", side_effect=lambda *_: calls.append("published")), \
-             patch.object(admin, "mark_candidate_promoted", side_effect=lambda *_: calls.append("promoted")):
+        client.rpc.return_value.execute.return_value.data = [
+            {"opportunity_id": "opportunity-1", "disposition": "registered"}]
+        with patch.object(admin, "fetch_candidates_by_ids", return_value=[candidate]):
             result = admin._publish_candidates(client, ["candidate-1"])
         self.assertEqual(result.promoted_count, 1)
-        self.assertEqual(calls[0][0], "record_opportunity_status_evidence")
-        self.assertEqual(calls[1:], ["published", "promoted"])
+        name, args = client.rpc.call_args.args
+        self.assertEqual(name, "register_opportunity_with_evidence")
+        self.assertTrue(args["p_publish"])
+        self.assertEqual(args["p_evidence"]["application_deadline"]["precision"], "DATE_ONLY")
+        client.table.assert_not_called()
 
     def test_admin_publish_rpc_failure_keeps_draft(self):
         from collect import admin
@@ -285,12 +306,10 @@ class CollectPromotionEvidenceTests(unittest.TestCase):
                      "title": "Test", "slug": "test", "official_url": "https://example.org/test"}
         client = MagicMock()
         client.rpc.return_value.execute.side_effect = RuntimeError("RPC unavailable")
-        with patch.object(admin, "fetch_candidates_by_ids", return_value=[candidate]), \
-             patch.object(admin, "upsert_draft_opportunity", return_value=("opportunity-1", "inserted")), \
-             patch.object(admin, "publish_opportunity") as publish:
+        with patch.object(admin, "fetch_candidates_by_ids", return_value=[candidate]):
             result = admin._publish_candidates(client, ["candidate-1"])
         self.assertEqual(result.failed_count, 1)
-        publish.assert_not_called()
+        client.table.assert_not_called()
 
     def test_admin_reprocessing_never_reopens_existing_closed_row(self):
         from collect import admin
@@ -298,13 +317,11 @@ class CollectPromotionEvidenceTests(unittest.TestCase):
                      "title": "Test", "slug": "test", "official_url": "https://example.org/test"}
         client = MagicMock()
         with patch.object(admin, "fetch_candidates_by_ids", return_value=[candidate]), \
-             patch.object(admin, "upsert_draft_opportunity",
-                          return_value=("opportunity-1", "protected_existing")), \
-             patch.object(admin, "publish_opportunity") as publish:
+             patch.object(admin, "register_candidate_opportunity",
+                          return_value=("opportunity-1", "protected_existing")):
             result = admin._publish_candidates(client, ["candidate-1"])
         self.assertEqual(result.skipped_count, 1)
         client.rpc.assert_not_called()
-        publish.assert_not_called()
 
 
 if __name__ == "__main__":

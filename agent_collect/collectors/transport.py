@@ -110,6 +110,7 @@ class SafeHttpTransport:
         timeout: float,
         max_bytes: int,
         max_redirects: int,
+        return_redirect_response: bool = False,
     ) -> HttpResponse:
         if timeout <= 0 or max_bytes <= 0 or max_redirects < 0:
             raise ValueError("invalid transport limits")
@@ -139,6 +140,8 @@ class SafeHttpTransport:
             response_headers = {key.lower(): value for key, value in response_headers.items()}
             if status not in {301, 302, 303, 307, 308}:
                 return HttpResponse(status, response_headers, content, current)
+            if return_redirect_response and max_redirects == 0:
+                return HttpResponse(status, response_headers, b"", current)
             location = response_headers.get("location")
             if not location:
                 raise CollectionTransportError("invalid_redirect", "redirect lacks Location")

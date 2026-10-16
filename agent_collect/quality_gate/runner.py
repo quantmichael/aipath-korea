@@ -6,12 +6,13 @@ import json
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID
 
 from agent_collect.adapters.service_db.duplicate_lookup import ServiceDuplicateLookup
 from agent_collect.config.settings import AgentSettings
 from agent_collect.dedup.engine import DeduplicationEngine
+from agent_collect.extraction.schema import ExtractionStatus, StoredExtraction
 from agent_collect.quality_gate.gate import PublishGate
 from agent_collect.quality_gate.models import (
     DuplicateStatus, GateDecision, GateStatus, QualityCandidate, QualityDuplicateResult,
@@ -51,7 +52,9 @@ class QualityGateOutcome:
 class QualityGateRunner:
     def __init__(self, *, sources: SourceRepository, documents: RawDocumentRepository,
                  quality: QualityRepository, service_duplicates: ServiceDuplicateLookup,
-                 settings: AgentSettings) -> None:
+                 settings: AgentSettings,
+                 evidence_assessor: Callable[[StoredExtraction, QualityVerification], Any] | None = None,
+                 require_official_evidence: bool = False) -> None:
         self.sources = sources
         self.processing_version = settings.processing_version
         self.documents = documents
@@ -60,6 +63,8 @@ class QualityGateRunner:
         self.dedup = DeduplicationEngine(similarity_threshold=settings.dedup_similarity_threshold)
         self.verifier = VerificationEngine(threshold=settings.verification_threshold)
         self.gate = PublishGate(threshold=settings.publish_threshold)
+        self.evidence_assessor = evidence_assessor
+        self.require_official_evidence = require_official_evidence
 
     def run(self, candidate_id: UUID) -> QualityGateOutcome:
         stored = self.quality.get_candidate(candidate_id)
@@ -89,11 +94,28 @@ class QualityGateRunner:
             duplicate = self.dedup.check(candidate, records)
         verification = self.verifier.verify(candidate, source=source, raw_document=raw,
                                              duplicate=duplicate)
-        verification = replace(
-            verification,
-            checks={**verification.checks,
-                    "normalization": self.quality.get_normalization_diagnostics(candidate_id)},
-        )
+        normalization = self.quality.get_normalization_diagnostics(candidate_id)
+        verification = replace(verification, checks={
+            **verification.checks, "normalization": normalization,
+        })
+        safety_reasons = []
+        if stored.status is ExtractionStatus.REVIEW_REQUIRED:
+            safety_reasons.append("EXTRACTION_REVIEW_REQUIRED")
+        if normalization.get("status") != "NORMALIZED":
+            safety_reasons.append("NORMALIZATION_REVIEW_REQUIRED")
+        start, deadline = self.quality.get_normalized_registration_times(candidate_id)
+        if (normalization.get("application_time_kind") != "DATETIME_CONFIRMED" or
+                start is None or start.tzinfo is None or
+                deadline is None or deadline.tzinfo is None):
+            safety_reasons.append("RECRUITMENT_TIME_UNCONFIRMED")
+        elif deadline <= datetime.now(timezone.utc):
+            safety_reasons.append("RECRUITMENT_EXPIRED")
+        if safety_reasons and verification.status == VerificationStatus.VERIFIED.value:
+            verification = replace(
+                verification, status=VerificationStatus.REVIEW_REQUIRED.value,
+                reasons=tuple(dict.fromkeys((*verification.reasons, *safety_reasons))),
+                checks={**verification.checks, "evidence_safety_reasons": safety_reasons},
+            )
         if lookup_failures:
             verification = QualityVerification(
                 verification.candidate_id, VerificationStatus.REVIEW_REQUIRED.value,
@@ -102,6 +124,29 @@ class QualityGateRunner:
                 {**verification.checks, "lookup_failures": lookup_failures},
                 verification.evidence_refs, verification.verified_at,
             )
+        if self.require_official_evidence and verification.status == VerificationStatus.VERIFIED.value:
+            evidence_state = "UNAVAILABLE"
+            evidence_reasons: tuple[str, ...] = ()
+            try:
+                if self.evidence_assessor is not None:
+                    evidence = self.evidence_assessor(stored, verification)
+                    evidence_state = evidence.state.value
+                    evidence_reasons = evidence.reasons
+            except Exception:
+                evidence_state = "ERROR"
+            if evidence_state != "VERIFIED":
+                reason = "OFFICIAL_EVIDENCE_" + evidence_state
+                verification = replace(
+                    verification, status=VerificationStatus.REVIEW_REQUIRED.value,
+                    reasons=tuple(dict.fromkeys((*verification.reasons, reason))),
+                    checks={**verification.checks, "official_evidence": {
+                        "state": evidence_state, "reasons": list(evidence_reasons),
+                    }},
+                )
+            else:
+                verification = replace(verification, checks={
+                    **verification.checks, "official_evidence": {"state": "VERIFIED"},
+                })
         decision = self.gate.decide(candidate, duplicate, verification)
         summary = _json_value(asdict(duplicate))
         if stored.provenance.get("cache_reused"):

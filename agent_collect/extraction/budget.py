@@ -42,6 +42,7 @@ class ExtractionBudgetDecision:
     daily_usage: int
     monthly_usage: int
     cached: StoredExtraction | None = None
+    previous_attempts: int = 0
 
 
 class ExtractionBudgetGuard:
@@ -84,4 +85,5 @@ class ExtractionBudgetGuard:
                 reason = ExtractionBlockReason.MONTHLY_LIMIT
             else:
                 reason = None
-        return ExtractionBudgetDecision(reason is None, reason, day, month, cached)
+        return ExtractionBudgetDecision(reason is None, reason, day, month, cached,
+                                        previous_attempts)

@@ -1,6 +1,7 @@
 """Offline PHASE 7 Service publication boundary tests; no network/DB access."""
 
 import unittest
+from unittest.mock import MagicMock
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
@@ -8,6 +9,7 @@ from uuid import UUID, uuid4
 from agent_collect.adapters.service_db.adapter import (
     SupabaseServiceDBAdapter, _json, publish_candidate_from_snapshot,
 )
+from agent_collect.adapters.service_db.supabase_tables import SupabaseServiceTables
 from agent_collect.adapters.service_db.contract import PublishAction, ServicePublicationStatus
 from agent_collect.adapters.service_db.mapping import (
     ConflictStatus, final_conflict, map_source, source_creation_eligible, stable_external_id,
@@ -25,6 +27,23 @@ from agent_collect.schemas.status import SourceStatus, VerificationStatus
 
 
 NOW = datetime(2026, 10, 4, tzinfo=timezone.utc)
+
+
+class AtomicServiceTableTests(unittest.TestCase):
+    def test_sdk_uses_single_registration_rpc_and_no_direct_insert(self):
+        client = MagicMock()
+        record_id = uuid4()
+        client.rpc.return_value.execute.return_value.data = [
+            {"opportunity_id": str(record_id), "disposition": "registered"}]
+        client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+            {"id": str(record_id), "status": "open"}]
+        tables = SupabaseServiceTables(client)
+        row, disposition = tables.register_opportunity(
+            {"slug": "fixture"}, {"evidence_ref": "fixture"})
+        self.assertEqual((row["id"], disposition), (str(record_id), "registered"))
+        self.assertEqual(client.rpc.call_args.args[0],
+                         "register_opportunity_with_evidence")
+        client.table.return_value.insert.assert_not_called()
 
 
 def candidate() -> PublishCandidate:
@@ -57,6 +76,9 @@ class FakeTables:
         self.opportunities = []
         self.insert_calls = 0
         self.raise_insert = False
+        self.time_evidence = {}
+        self.raise_evidence = False
+        self.archive_ids = set()
 
     def list_sources(self): return list(self.sources)
     def get_conference_category(self): return self.category
@@ -69,8 +91,20 @@ class FakeTables:
         row = {"id": str(uuid4()), **payload}
         self.opportunities.append(row)
         return row
+    def register_opportunity(self, payload, evidence):
+        if self.raise_evidence:
+            raise RuntimeError("mock evidence RPC failure")
+        row = self.insert_opportunity(payload)
+        self.time_evidence[row["id"]] = evidence
+        return row, "registered"
     def get_opportunity(self, record_id):
         return next((row for row in self.opportunities if row["id"] == str(record_id)), None)
+    def register_time_evidence(self, record_id, evidence):
+        if self.raise_evidence:
+            raise RuntimeError("mock evidence RPC failure")
+        self.time_evidence[str(record_id)] = evidence
+    def public_archive_contains(self, record_id):
+        return str(record_id) in self.archive_ids
 
 
 class FakeLedger:
@@ -95,7 +129,7 @@ class FakeLedger:
                                   service_opportunity_id=self.service_opportunity_id,
                                   attempt_count=self.claim_count)
     def claim(self, candidate_id, *, prior_attempts):
-        if self.status != "READY":
+        if self.status not in {"READY", "FAILED"}:
             return False
         self.status = "PUBLISHING"
         self.claim_count += 1
@@ -261,11 +295,48 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(first.action, PublishAction.CREATED)
         self.assertEqual(first.service_record_id, UUID(self.tables.opportunities[0]["id"]))
         self.assertEqual(self.tables.insert_calls, 1)
+        evidence = self.tables.time_evidence[str(first.service_record_id)]
+        self.assertEqual(evidence["event_start"]["precision"], "EXACT_TIME")
+        self.assertEqual(evidence["application_deadline"]["precision"], "EXACT_TIME")
         self.assertEqual(self.ledger.status, "PUBLISHED")
         self.assertTrue(any(event == "SERVICE_PUBLISHED" for event, _ in self.ledger.logs))
         second = self.adapter.publish(self.item)
         self.assertEqual(second.action, PublishAction.SKIPPED_DUPLICATE)
         self.assertEqual(self.tables.insert_calls, 1)
+
+    def test_cron_transition_between_commit_and_readback_requires_provenance(self):
+        original_register = self.tables.register_opportunity
+        def concurrent_cron(payload, evidence):
+            row, disposition = original_register(payload, evidence)
+            row["status"] = "closed"
+            self.tables.archive_ids.add(row["id"])
+            return row, disposition
+        self.tables.register_opportunity = concurrent_cron
+        result = self.adapter.publish(self.item)
+        self.assertEqual(result.action, PublishAction.CREATED)
+        self.assertEqual(result.published_status, ServicePublicationStatus.CLOSED)
+
+    def test_unproven_closed_readback_is_rejected(self):
+        original_register = self.tables.register_opportunity
+        def unproven_status(payload, evidence):
+            row, disposition = original_register(payload, evidence)
+            row["status"] = "closed"
+            return row, disposition
+        self.tables.register_opportunity = unproven_status
+        result = self.adapter.publish(self.item)
+        self.assertEqual(result.action, PublishAction.FAILED)
+
+    def test_evidence_rpc_failure_retries_without_second_service_insert(self):
+        self.tables.raise_evidence = True
+        first = self.adapter.publish(self.item)
+        self.assertEqual(first.action, PublishAction.FAILED)
+        self.assertEqual(self.tables.insert_calls, 0)
+        self.assertEqual(self.tables.time_evidence, {})
+        self.tables.raise_evidence = False
+        second = self.adapter.publish(self.item)
+        self.assertEqual(second.action, PublishAction.CREATED)
+        self.assertEqual(self.tables.insert_calls, 1)
+        self.assertEqual(len(self.tables.time_evidence), 1)
 
     def test_queue_update_failure_reconciles_without_second_service_insert(self):
         self.ledger.fail_mark_once = True

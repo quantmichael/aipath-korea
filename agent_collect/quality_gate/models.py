@@ -55,8 +55,8 @@ class ReviewReason(StrEnum):
 class QualityCandidate:
     id: UUID
     source_id: UUID
-    run_id: UUID
-    raw_document_id: UUID
+    run_id: UUID | None
+    raw_document_id: UUID | None
     source_url: str
     fields: dict[str, dict[str, Any]]
     is_conference: bool

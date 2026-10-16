@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from agent_collect.__main__ import main
@@ -36,6 +37,7 @@ class RuntimeConfigTests(unittest.TestCase):
         })
         runner = runtime.discovery_runner(provider, repository=InMemoryDiscoveryRepository())
         self.assertEqual((runner.policy.max_results, runner.gate.threshold), (1, 0.90))
+        self.assertIsNotNone(runner.quality_evaluator)
 
     def test_agent_credentials_override_backend_credentials(self) -> None:
         config = resolve_supabase_config({
@@ -55,6 +57,16 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.service_key, "service-key")
         with self.assertRaisesRegex(RuntimeError, "missing AGENT_SUPABASE"):
             resolve_supabase_config({})
+
+    def test_metadata_sdk_initialization_does_not_query_db(self) -> None:
+        client = Mock()
+        runtime = AgentRuntime(
+            sources=SimpleNamespace(client=client), runs=InMemoryCollectionRunRepository(),
+            documents=InMemoryRawDocumentRepository(), settings=load_settings(environ={}),
+        )
+        sdk = runtime.metadata_evidence()
+        self.assertIs(sdk.client, client)
+        self.assertEqual(client.mock_calls, [])
 
     def test_cli_config_check_requires_no_external_dependency_or_network(self) -> None:
         output = io.StringIO()

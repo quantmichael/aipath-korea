@@ -33,9 +33,12 @@ class AutomationRuntime:
         self.lease, self.worker_id, self.lease_seconds = lease, worker_id, lease_seconds
 
     def status(self) -> dict[str, Any]:
+        names = ("discovery", "collection", "processing", "publish")
+        if self.worker_enabled.get("ai_plan") or self.worker_enabled.get("ai_execute"):
+            names = ("ai_plan", "ai_execute", *names)
         return {"automation_enabled": self.enabled,
                 "workers": {name: bool(self.worker_enabled.get(name, False))
-                for name in ("discovery", "collection", "processing", "publish")}}
+                for name in names}}
 
     def run_once(self, *, dry_run: bool = False) -> AutomationSummary:
         run_id = uuid4()
@@ -55,7 +58,7 @@ class AutomationRuntime:
                 return AutomationSummary(run_id, started, datetime.now(timezone.utc),
                                          False, "LOCKED", results, errors)
         try:
-            for name in ("discovery", "collection", "processing", "publish"):
+            for name in ("ai_plan", "ai_execute", "discovery", "collection", "processing", "publish"):
                 if not self.worker_enabled.get(name, False):
                     continue
                 try:
@@ -76,6 +79,13 @@ class AutomationRuntime:
                         if field.name.endswith("_count") and
                         isinstance(getattr(result, field.name), int)
                     } if is_dataclass(result) else {} for name, result in results.items()},
+                    "discovered_count": getattr(results.get("discovery"), "discovered_count", 0),
+                    "candidate_count": getattr(results.get("discovery"), "candidate_count", 0),
+                    "auto_approved_count": getattr(results.get("discovery"), "auto_approved_count", 0),
+                    "review_required_count": getattr(results.get("discovery"), "review_required_count", 0),
+                    "rejected_count": getattr(results.get("discovery"), "rejected_count", 0),
+                    "collection_scheduled_count": getattr(results.get("discovery"), "collection_scheduled_count", 0),
+                    "collection_success_count": getattr(results.get("collection"), "success_count", 0),
                     "errors": errors,
                 })
             return summary

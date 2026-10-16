@@ -26,6 +26,7 @@ from agent_collect.dedup.engine import normalize_title
 from agent_collect.repositories.publish_ledger import PublishLedger, QueueAuthorization
 from agent_collect.schemas.models import DuplicateMethod, DuplicateResult, PublishCandidate, Vertical
 from agent_collect.schemas.status import VerificationStatus
+from opportunity_status.evidence import build_agent_evidence
 
 
 def _json(value: Any) -> Any:
@@ -191,11 +192,13 @@ class SupabaseServiceDBAdapter:
         ):
             value = getattr(candidate, name)
             if value is not None:
-                payload[name] = value.isoformat() if isinstance(value, datetime) else value
+                payload[name] = (value.astimezone(timezone.utc).isoformat()
+                                 if isinstance(value, datetime) else value)
         return payload
 
     def publish(self, candidate: PublishCandidate, *, preclaimed: bool = False) -> PublishResult:
-        plan = self.dry_run(candidate, preclaimed=preclaimed)
+        plan = self.dry_run(candidate, preclaimed=preclaimed,
+                            retryable=not preclaimed)
         queue = self.ledger.get(candidate.agent_item_id)
         if (self.publish_enabled and queue is not None and
                 queue.snapshot == _json(asdict(candidate)) and
@@ -255,9 +258,12 @@ class SupabaseServiceDBAdapter:
                 return PublishResult(candidate.agent_item_id, PublishAction.CONFLICT,
                                      source_id=plan.source_id, conflict_status=fresh.status.value,
                                      error_code=fresh.reason)
-            inserted = self.tables.insert_opportunity(plan.insert_payload)
+            inserted, disposition = self.tables.register_opportunity(
+                plan.insert_payload, build_agent_evidence(candidate))
             record_id = UUID(inserted["id"])
-            return self._reconcile(candidate, record_id, plan.source_id, plan.category_id)
+            return self._reconcile(candidate, record_id, plan.source_id,
+                                   plan.category_id,
+                                   evidence_registered=(disposition == "registered"))
         except Exception as error:
             # A transport exception may happen after the INSERT commits. Stable
             # slug/external_id plus readback is the recovery path, not a blind retry.
@@ -295,16 +301,25 @@ class SupabaseServiceDBAdapter:
         ):
             raise RuntimeError("Service readback mismatch")
         status = ServicePublicationStatus(row["status"])
-        if status not in {ServicePublicationStatus.SCHEDULED,
-                          ServicePublicationStatus.OPEN, ServicePublicationStatus.ONGOING}:
+        if status in {ServicePublicationStatus.CLOSED, ServicePublicationStatus.ENDED}:
+            if not self.tables.public_archive_contains(record_id):
+                raise RuntimeError("Service readback archive provenance missing")
+        elif status not in {ServicePublicationStatus.SCHEDULED,
+                           ServicePublicationStatus.OPEN,
+                           ServicePublicationStatus.ONGOING}:
             raise RuntimeError("Service readback is not API-visible")
         published_at = datetime.fromisoformat(row["published_at"].replace("Z", "+00:00"))
         return row, status, published_at
 
     def _reconcile(self, candidate: PublishCandidate, record_id: UUID,
-                   source_id: UUID, category_id: UUID | None) -> PublishResult:
+                   source_id: UUID, category_id: UUID | None,
+                   *, evidence_registered: bool = False) -> PublishResult:
         row, status, published_at = self._verified_readback(candidate, record_id,
                                                              source_id, category_id)
+        # Existing partial rows from older images still need idempotent
+        # evidence reconciliation. New rows were registered in one DB call.
+        if not evidence_registered:
+            self.tables.register_time_evidence(record_id, build_agent_evidence(candidate))
         self.ledger.mark_published(candidate.agent_item_id, service_id=record_id,
                                    slug=row["slug"], service_status=status.value,
                                    published_at=published_at)

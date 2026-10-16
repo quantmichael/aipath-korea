@@ -44,6 +44,23 @@ class SupabaseServiceTables:
         return self._bounded("opportunities",
                              "id,source_id,external_id,title,organizer,official_url,event_start_at,slug,status")
 
+    def register_opportunity(self, payload: dict[str, Any],
+                             evidence: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        """The RPC commits the public row only with validated time evidence."""
+        self.write_count += 1
+        rows = self.client.rpc("register_opportunity_with_evidence", {
+            "p_record": payload, "p_evidence": evidence,
+            "p_candidate_id": None, "p_publish": True,
+        }).execute().data or []
+        if len(rows) != 1 or rows[0].get("disposition") not in {
+            "registered", "protected_existing"
+        } or not rows[0].get("opportunity_id"):
+            raise RuntimeError("atomic Opportunity registration response invalid")
+        record = self.get_opportunity(UUID(rows[0]["opportunity_id"]))
+        if record is None:
+            raise RuntimeError("atomic Opportunity registration readback missing")
+        return record, rows[0]["disposition"]
+
     def insert_opportunity(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.write_count += 1
         rows = self.client.table("opportunities").insert(payload).execute().data or []
@@ -51,8 +68,21 @@ class SupabaseServiceTables:
             raise RuntimeError("opportunity insert response not singular")
         return rows[0]
 
+    def register_time_evidence(self, record_id: UUID, evidence: dict[str, Any]) -> None:
+        self.write_count += 1
+        self.client.rpc("record_opportunity_status_evidence", {
+            "p_opportunity_id": str(record_id), "p_evidence": evidence,
+        }).execute()
+
     def get_opportunity(self, record_id: UUID) -> dict[str, Any] | None:
         self.read_count += 1
         rows = (self.client.table("opportunities").select("*")
                 .eq("id", str(record_id)).limit(1).execute().data or [])
         return rows[0] if rows else None
+
+    def public_archive_contains(self, record_id: UUID) -> bool:
+        self.read_count += 1
+        rows = self.client.rpc("opportunity_public_archive_ids", {
+            "p_ids": [str(record_id)]
+        }).execute().data or []
+        return any(row.get("opportunity_id") == str(record_id) for row in rows)

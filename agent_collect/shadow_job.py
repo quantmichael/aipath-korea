@@ -108,6 +108,8 @@ def main() -> int:
           "worker_id": worker_id})
     try:
         runtime = AgentRuntime.connect()
+        runtime.metadata_evidence()
+        _log({"event": "metadata_sdk_initialized", "publish_enabled": False})
         summary = runtime.automation_runtime(
             Path("/tmp/agent-raw-unused"), worker_id=worker_id,
         ).run_once()

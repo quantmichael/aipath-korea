@@ -17,6 +17,7 @@ from agent_collect.discovery.models import (
 from agent_collect.discovery.providers import (
     FakeSearchProvider, SearchHit, SearchRateLimitError, SearchRequestPolicy, normalize_hit,
 )
+from agent_collect.discovery.quality import SearchQualityEvaluator
 from agent_collect.discovery.runner import DiscoveryRunner, PromotionGate
 from agent_collect.registry.service import SourceRegistryService
 from agent_collect.repositories.discovery import InMemoryDiscoveryRepository
@@ -138,6 +139,7 @@ class DiscoveryTests(unittest.TestCase):
             provider=provider, repository=self.repo, registry=self.registry,
             evaluator=RuleBasedEvaluator(official_domain_hints=("example.org",)),
             gate=PromotionGate(self.registry, threshold=0.85),
+            quality_evaluator=SearchQualityEvaluator(),
         )
         outcome = runner.run(q)
         self.assertEqual((outcome.query.result_count, outcome.query.candidate_count,
@@ -146,6 +148,10 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(len(self.repo.results), 4)
         self.assertEqual(len(self.repo.candidates), 3)
+        self.assertTrue(all(row.provider_metadata["quality"]["source_candidate_persisted"] is None
+                            for row in self.repo.results.values()))
+        self.assertTrue(all(not row.provider_metadata["quality"]["verified_new_opportunity"]
+                            for row in self.repo.results.values()))
         self.assertEqual(sum(row.status is SearchResultStatus.FILTERED
                              for row in self.repo.results.values()), 1)
         promoted = self.sources.get(next(iter(self.sources._rows)))

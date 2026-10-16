@@ -19,6 +19,7 @@ from agent_collect.extraction.providers import (
     ExtractionRequest,
 )
 from agent_collect.extraction.runner import ExtractionRunner
+from agent_collect.budget.reservations import SupabaseBudgetReservations
 from agent_collect.extraction.schema import FIELD_NAMES, ExtractionStatus
 from agent_collect.extraction.validation import parse_unambiguous_date
 from agent_collect.repositories.extraction import InMemoryExtractionRepository
@@ -112,6 +113,43 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(cached.status, ExtractionStatus.CACHED)
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(self.repo.count_attempts_since(datetime(2000, 1, 1, tzinfo=timezone.utc)), 1)
+
+    def test_shared_llm_reservation_failure_prevents_provider_call(self):
+        from agent_collect.budget.reservations import BudgetAlreadyReserved
+
+        class Reservations:
+            def reserve(self, **kwargs):
+                raise BudgetAlreadyReserved("duplicate attempt")
+            def dispatch(self, reservation_id):
+                raise AssertionError("must not dispatch")
+            def finish(self, reservation_id, **kwargs):
+                raise AssertionError("must not finish")
+
+        provider = FakeExtractionProvider(payload())
+        runner = ExtractionRunner(
+            documents=self.documents, storage=self.storage, repository=self.repo,
+            provider=provider, settings=load_settings(environ={
+                "AGENT_LLM_ENABLED": "true", "AGENT_LLM_MODEL": "gpt-5.4-nano"}),
+            reservations=Reservations())
+        with self.assertRaises(BudgetAlreadyReserved):
+            runner.run(self.document.id)
+        self.assertEqual(provider.calls, [])
+
+    def test_supabase_openai_reserves_with_planner_off(self):
+        provider = FakeExtractionProvider(payload())
+        provider.name = "openai"
+        repository = InMemoryExtractionRepository()
+        repository.client = object()
+        settings = load_settings(environ={
+            "AGENT_LLM_ENABLED": "true", "AGENT_LLM_MODEL": "gpt-5.4-nano"})
+        self.assertFalse(settings.ai_discovery_planner_enabled)
+        runner = ExtractionRunner(
+            documents=self.documents, storage=self.storage, repository=repository,
+            provider=provider, settings=settings)
+        self.assertIsInstance(runner.reservations, SupabaseBudgetReservations)
+        with self.assertRaises(AttributeError):
+            runner.run(self.document.id)
+        self.assertEqual(provider.calls, [])
 
     def test_original_model_confidence_survives_validation_clamp_in_provenance(self):
         data = payload()

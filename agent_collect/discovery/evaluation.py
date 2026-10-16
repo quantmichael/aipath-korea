@@ -16,8 +16,15 @@ class SourceEvaluator(Protocol):
 
 AI_PATTERN = re.compile(r"(?<![a-z])(?:ai|ml)(?![a-z])|artificial intelligence|machine learning|인공지능")
 VERTICAL_TERMS = (
-    "conference", "competition", "hackathon", "education", "meetup",
-    "컨퍼런스", "학회", "대회", "해커톤", "교육", "밋업",
+    "conference", "symposium", "call for papers", "competition", "contest",
+    "hackathon", "education", "course", "training", "fellowship",
+    "research program", "research programme", "research grant", "funding",
+    "government grant", "call for proposals", "recruitment", "call for applications",
+    "meetup", "컨퍼런스", "학회", "논문모집", "공모전", "경진대회", "대회",
+    "exhibition", "expo", "trade show", "전시회", "산업전", "박람회", "엑스포",
+    "피지컬 ai", "스마트팩토리", "accelerator", "액셀러레이팅",
+    "해커톤", "교육", "강좌", "연수", "연구 프로그램", "연구과제",
+    "연구지원", "지원사업", "정부지원", "모집공고", "참가자 모집", "밋업",
 )
 
 

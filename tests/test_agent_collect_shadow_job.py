@@ -97,14 +97,18 @@ class ShadowJobTests(unittest.TestCase):
                                   status="COMPLETED", errors={}, results={"processing": worker})
         run_once = Mock(return_value=summary)
         runner = SimpleNamespace(run_once=run_once)
-        runtime = SimpleNamespace(automation_runtime=lambda *a, **k: runner)
+        metadata = Mock(return_value=object())
+        runtime = SimpleNamespace(automation_runtime=lambda *a, **k: runner,
+                                  metadata_evidence=metadata)
         with patch.dict(os.environ, shadow_env(), clear=True), patch(
             "agent_collect.shadow_job.AgentRuntime.connect", return_value=runtime
         ) as connect, redirect_stdout(io.StringIO()) as output:
             self.assertEqual(main(), 0)
             connect.assert_called_once()
+            metadata.assert_called_once_with()
             run_once.assert_called_once_with()
             records = [json.loads(line) for line in output.getvalue().splitlines()]
+            self.assertIn("metadata_sdk_initialized", [r["event"] for r in records])
             self.assertEqual(records[-1]["exit_code"], 0)
             self.assertFalse(records[-1]["publish_enabled"])
         worker.failed_count = 1

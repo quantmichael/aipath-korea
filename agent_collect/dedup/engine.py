@@ -55,7 +55,7 @@ def candidate_record(candidate: QualityCandidate) -> DuplicateRecord:
         organizer=candidate.value("organizer"), official_url=candidate.value("official_url"),
         registration_url=candidate.value("registration_url"),
         canonical_url=candidate.value("official_url"), event_start=candidate.value("event_start"),
-        raw_document_id=str(candidate.raw_document_id),
+        raw_document_id=str(candidate.raw_document_id) if candidate.raw_document_id else None,
     )
 
 

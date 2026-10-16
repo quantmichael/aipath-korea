@@ -12,6 +12,7 @@ RUN python -m pip install --no-cache-dir -r requirements.agent.txt \
     && useradd --system --gid agent --home-dir /app --no-create-home agent
 
 COPY --chown=agent:agent agent_collect ./agent_collect
+COPY --chown=agent:agent opportunity_status/__init__.py opportunity_status/evidence.py ./opportunity_status/
 
 USER agent
 

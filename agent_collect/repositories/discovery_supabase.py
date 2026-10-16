@@ -99,6 +99,10 @@ class SupabaseDiscoveryRepository:
             provider_metadata=row.get("provider_metadata") or {},
         ) if row else None
 
+    def has_prior_result_url(self, canonical_url: str, result_id: UUID) -> bool:
+        return _one(self.client.table("agent_search_results").select("id")
+                    .eq("canonical_url", canonical_url).neq("id", str(result_id))) is not None
+
     def save_candidate(self, candidate: SourceCandidate) -> SourceCandidate:
         self.client.table("agent_source_candidates").upsert({
             "id": str(candidate.id), "query_id": str(candidate.query_id),

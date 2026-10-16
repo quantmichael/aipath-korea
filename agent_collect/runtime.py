@@ -2,7 +2,8 @@
 
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
@@ -14,18 +15,33 @@ from agent_collect.adapters.service_db.supabase_tables import SupabaseServiceTab
 from agent_collect.collectors.runner import CollectionRunner
 from agent_collect.config.settings import AgentSettings, load_settings
 from agent_collect.discovery.evaluation import RuleBasedEvaluator
+from agent_collect.discovery.auto_approval import (
+    AutoApprovalAssessor, AutoApprovalExecutor, load_approval_scopes,
+)
 from agent_collect.discovery.budget import SearchBudgetGuard, SearchBudgetPolicy
 from agent_collect.discovery.providers import SearchProvider, SearchRequestPolicy
 from agent_collect.discovery.tavily import TavilySearchProvider
 from agent_collect.discovery.scheduling import DiscoveryWorker
+from agent_collect.discovery.planner import AutonomousDiscoveryPlanner, SearchPlan
+from agent_collect.discovery.goal import GoalDrivenDiscoveryPlanner, OpenAIGoalPlanner
+from agent_collect.discovery.goal_supabase import (
+    GoalExecutionWorker, GoalPlanningWorker, SupabaseGoalContext, SupabaseGoalPlans,
+)
 from agent_collect.discovery.scheduling_supabase import SupabaseDiscoverySchedules
 from agent_collect.discovery.models import DiscoveryQuery
 from agent_collect.schemas.models import Vertical
 from agent_collect.discovery.runner import DiscoveryRunner, PromotionGate
+from agent_collect.discovery.quality import SearchQualityEvaluator
+from agent_collect.discovery.evidence_supabase import (
+    SupabaseEvidenceIntegration, SupabasePreGateEvidence,
+)
+from agent_collect.discovery.search_only import SearchOnlyDiscoveryRunner
+from agent_collect.budget.reservations import SupabaseBudgetReservations
 from agent_collect.extraction.providers import ExtractionProvider
 from agent_collect.extraction.providers import OpenAIExtractionProvider
 from agent_collect.extraction.runner import ExtractionRunner
 from agent_collect.normalization.runner import NormalizationRunner
+from agent_collect.metadata.supabase import SupabaseMetadataEvidence
 from agent_collect.quality_gate.runner import QualityGateRunner
 from agent_collect.registry.service import SourceRegistryService
 from agent_collect.registry.approval import SourceApprovalService
@@ -101,6 +117,12 @@ class AgentRuntime:
         )
 
     def collection_runner(self, raw_dir: Path, *, environ: Mapping[str, str] | None = None) -> CollectionRunner:
+        auto_checker = None
+        if self.settings.discovery_auto_approval_enabled:
+            auto_checker = AutoApprovalAssessor(
+                load_approval_scopes(self.settings.discovery_auto_approval_scopes_json),
+                user_agent=self.settings.user_agent,
+            ).revalidate_source
         return CollectionRunner(
             sources=self.sources,
             runs=self.runs,
@@ -109,6 +131,7 @@ class AgentRuntime:
             planner=CollectionPlanner(),
             settings=self.settings,
             environ=environ,
+            auto_permission_checker=auto_checker,
         )
 
     def raw_storage(self, raw_dir: Path):
@@ -121,6 +144,20 @@ class AgentRuntime:
                 retention_days=self.settings.raw_retention_days,
             )
         return LocalRawContentStorage(raw_dir, retention_days=self.settings.raw_retention_days)
+
+    def evidence_integration(self, raw_dir: Path) -> SupabaseEvidenceIntegration:
+        """Assemble explicit, read-only PHASE 12J evidence inspection."""
+        client = getattr(self.sources, "client", None)
+        if client is None:
+            raise RuntimeError("Evidence integration requires an Agent Supabase client")
+        return SupabaseEvidenceIntegration(client, self.raw_storage(raw_dir))
+
+    def metadata_evidence(self) -> SupabaseMetadataEvidence:
+        """Assemble the metadata SDK without fetching pages or writing records."""
+        client = getattr(self.sources, "client", None)
+        if client is None:
+            raise RuntimeError("Metadata evidence requires an Agent Supabase client")
+        return SupabaseMetadataEvidence(client)
 
     def collection_schedule_policy(self) -> CollectionSchedulePolicy:
         return CollectionSchedulePolicy(
@@ -170,14 +207,16 @@ class AgentRuntime:
             storage=self.raw_storage(raw_dir),
             extractor=self.extraction_runner(provider, raw_dir),
             normalizer=self.normalization_runner(),
-            quality_gate=self.quality_gate_runner(),
+            quality_gate=self.quality_gate_runner(require_official_evidence=True,
+                                                  raw_dir=raw_dir),
             policy=self.processing_policy(), worker_id=worker_id,
         )
 
     def discovery_runner(
         self, provider: SearchProvider, *, repository: DiscoveryRepository | None = None,
+        search_only: bool = False,
     ) -> DiscoveryRunner:
-        """Assemble manual Discovery; no search is executed by construction."""
+        """Assemble Discovery without running it; search_only has no Source write path."""
         if not self.settings.discovery_enabled and provider.name != "tavily":
             raise RuntimeError("Discovery feature flag is disabled")
         if self.settings.discovery_search_provider and provider.name != self.settings.discovery_search_provider:
@@ -187,7 +226,26 @@ class AgentRuntime:
             if client is None:
                 raise RuntimeError("Discovery repository or Supabase client required")
             repository = SupabaseDiscoveryRepository(client)
-        registry = SourceRegistryService(self.sources)
+        if search_only and provider.name != "tavily":
+            raise ValueError("search-only execution requires Tavily")
+        registry = None if search_only else SourceRegistryService(self.sources)
+        auto_assessor = auto_executor = None
+        if self.settings.discovery_auto_approval_enabled and not search_only:
+            client = getattr(self.sources, "client", None)
+            if client is None:
+                raise RuntimeError("auto approval requires audited Supabase Source review")
+            auto_assessor = AutoApprovalAssessor(
+                load_approval_scopes(self.settings.discovery_auto_approval_scopes_json),
+                user_agent=self.settings.user_agent,
+            )
+            def schedule_confirmed(source):
+                rows = (client.table("agent_source_schedules")
+                        .select("source_id").eq("source_id", str(source.id))
+                        .limit(1).execute().data or [])
+                return len(rows) == 1 and rows[0].get("source_id") == str(source.id)
+
+            auto_executor = AutoApprovalExecutor(
+                self.source_approval_service(), schedule_verifier=schedule_confirmed)
         budget_guard = None
         if provider.name == "tavily":
             budget_guard = SearchBudgetGuard(
@@ -201,17 +259,34 @@ class AgentRuntime:
                 ), provider_enabled=self.settings.discovery_enabled,
                 credential_present=isinstance(provider, TavilySearchProvider) and provider.credential_present,
             )
+        evaluator = RuleBasedEvaluator(
+            official_domain_hints=self.settings.discovery_official_domain_hints,
+        )
+        policy = SearchRequestPolicy(
+            max_results=self.settings.discovery_max_results,
+            timeout_seconds=self.settings.discovery_request_timeout_seconds,
+        )
+        reservations = (SupabaseBudgetReservations(getattr(self.sources, "client"))
+                        if provider.name == "tavily" and
+                        getattr(self.sources, "client", None) is not None
+                        else None)
+        if search_only:
+            return SearchOnlyDiscoveryRunner(
+                provider=provider, repository=repository,
+                find_source=self.sources.find_by_canonical_url,
+                evaluator=evaluator, budget_guard=budget_guard,
+                reservations=reservations, policy=policy,
+            )
         return DiscoveryRunner(
             provider=provider, repository=repository, registry=registry,
-            evaluator=RuleBasedEvaluator(
-                official_domain_hints=self.settings.discovery_official_domain_hints,
-            ),
+            evaluator=evaluator,
             gate=PromotionGate(registry, threshold=self.settings.discovery_promotion_threshold),
-            policy=SearchRequestPolicy(
-                max_results=self.settings.discovery_max_results,
-                timeout_seconds=self.settings.discovery_request_timeout_seconds,
-            ),
+            policy=policy,
             budget_guard=budget_guard,
+            auto_assessor=auto_assessor,
+            auto_executor=auto_executor,
+            reservations=reservations,
+            quality_evaluator=SearchQualityEvaluator(),
         )
 
     def discovery_worker(self, *, worker_id: str) -> DiscoveryWorker:
@@ -233,6 +308,32 @@ class AgentRuntime:
         if client is None:
             raise RuntimeError("Discovery scheduling requires an Agent Supabase client")
         return SupabaseDiscoverySchedules(client)
+
+    def discovery_plan_preview(self, *, now: datetime | None = None) -> SearchPlan:
+        """Read-only proposal using existing schedules and the persistent usage ledger."""
+        client = getattr(self.sources, "client", None)
+        if client is None:
+            raise RuntimeError("Discovery planning requires an Agent Supabase client")
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        policy = SearchBudgetPolicy(
+            daily_limit=self.settings.discovery_daily_search_limit,
+            monthly_limit=self.settings.discovery_monthly_search_limit,
+            cooldown_hours=self.settings.discovery_query_cooldown_hours,
+            timezone_name=self.settings.discovery_budget_timezone,
+            warning_threshold=self.settings.discovery_monthly_warning_threshold,
+            critical_threshold=self.settings.discovery_monthly_critical_threshold,
+        )
+        local = now.astimezone(ZoneInfo(policy.timezone_name))
+        month_start = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        since = min(month_start.astimezone(timezone.utc),
+                    now - timedelta(hours=policy.cooldown_hours))
+        schedules = tuple(self.discovery_schedule_repository().list_all())
+        queries = tuple(SupabaseDiscoveryRepository(client).list_queries_since("tavily", since))
+        return AutonomousDiscoveryPlanner(
+            policy=policy, daily_plan_limit=min(3, policy.daily_limit)).plan(
+            now=now, existing_schedules=schedules, recent_queries=queries)
 
     def automation_status_live(self) -> dict[str, Any]:
         """Bounded read-only status; an unavailable migration is reported, not hidden."""
@@ -297,16 +398,21 @@ class AgentRuntime:
             repository=repository, provider=provider, settings=self.settings,
         )
 
-    def quality_gate_runner(self) -> QualityGateRunner:
+    def quality_gate_runner(self, *, require_official_evidence: bool = True,
+                            raw_dir: Path | None = None) -> QualityGateRunner:
         """Assemble a manual Agent quality run; Service access is SELECT-only."""
         client = getattr(self.sources, "client", None)
         if client is None:
             raise RuntimeError("Quality Gate requires an Agent Supabase client")
+        assessor = (SupabasePreGateEvidence(client, self.raw_storage(raw_dir))
+                    if require_official_evidence and raw_dir is not None else None)
         return QualityGateRunner(
             sources=self.sources, documents=self.documents,
             quality=SupabaseQualityRepository(client),
             service_duplicates=SupabaseServiceDuplicateLookup(client),
             settings=self.settings,
+            evidence_assessor=assessor,
+            require_official_evidence=require_official_evidence,
         )
 
     def normalization_runner(self) -> NormalizationRunner:
@@ -352,12 +458,25 @@ class AgentRuntime:
         return AutomationRuntime(
             enabled=self.settings.automation_enabled,
             worker_enabled={
+                "ai_plan": self.settings.ai_discovery_planner_enabled,
+                "ai_execute": self.settings.ai_discovery_execution_enabled,
                 "discovery": self.settings.discovery_worker_enabled and self.settings.discovery_enabled,
                 "collection": self.settings.collection_worker_enabled,
                 "processing": self.settings.processing_worker_enabled,
                 "publish": self.settings.publish_worker_enabled and self.settings.publish_enabled,
             },
             workers={
+                "ai_plan": lambda: GoalPlanningWorker(
+                    context=SupabaseGoalContext(client), plans=SupabaseGoalPlans(client),
+                    budget=SupabaseBudgetReservations(client),
+                    planner=GoalDrivenDiscoveryPlanner(OpenAIGoalPlanner(
+                        os.environ.get("OPENAI_API_KEY"), model=self.settings.extraction_model)),
+                    enabled=self.settings.ai_discovery_planner_enabled),
+                "ai_execute": lambda: GoalExecutionWorker(
+                    plans=SupabaseGoalPlans(client),
+                    runner=self.discovery_runner(TavilySearchProvider(
+                        os.environ.get("AGENT_TAVILY_API_KEY"))),
+                    enabled=self.settings.ai_discovery_execution_enabled),
                 "discovery": lambda: self.discovery_worker(worker_id=worker_id),
                 "collection": lambda: self.collection_worker(raw_dir, worker_id=worker_id),
                 "processing": lambda: self.processing_worker(raw_dir, worker_id=worker_id),

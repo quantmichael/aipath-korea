@@ -44,12 +44,14 @@ class CollectionMethod(StrEnum):
 
 class Vertical(StrEnum):
     CONFERENCE = "conference"
+    EXHIBITION = "exhibition"
     COMPETITION = "competition"
     HACKATHON = "hackathon"
     EDUCATION = "education"
     MEETUP = "meetup"
     GRANT = "grant"
     RESEARCH = "research"
+    PROGRAM = "program"
     JOB = "job"
     UNKNOWN = "unknown"
 

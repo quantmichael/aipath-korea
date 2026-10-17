@@ -10,6 +10,7 @@ from agent_collect.adapters.service_db.adapter import (
 )
 from agent_collect.adapters.service_db.contract import PublishAction
 from agent_collect.repositories.publish_ledger import PublishLedger
+from agent_collect.metadata.supabase import SupabaseMetadataEvidence
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,14 @@ class PublishSummary:
     review_count: int
     failed_count: int
     previews: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class MetadataPublishResult:
+    candidate_id: UUID
+    status: str
+    opportunity_id: UUID | None = None
+    reasons: tuple[str, ...] = ()
 
 
 class PublishJobs(Protocol):
@@ -91,11 +100,90 @@ class _ClaimedLedger:
 class PublishWorker:
     def __init__(self, *, jobs: PublishJobs, ledger: PublishLedger,
                  adapter: SupabaseServiceDBAdapter, worker_id: str,
-                 max_jobs: int = 1, lease_seconds: int = 300) -> None:
+                 max_jobs: int = 1, lease_seconds: int = 300,
+                 metadata: SupabaseMetadataEvidence | None = None,
+                 metadata_publish_enabled: bool = False) -> None:
         if not worker_id.strip() or not 1 <= max_jobs <= 100 or not 1 <= lease_seconds <= 86400:
             raise ValueError("invalid publish worker policy")
         self.jobs, self.ledger, self.adapter = jobs, ledger, adapter
         self.worker_id, self.max_jobs, self.lease_seconds = worker_id, max_jobs, lease_seconds
+        self.metadata = metadata
+        self.metadata_publish_enabled = metadata_publish_enabled
+
+    def run_metadata_candidate(self, candidate_id: UUID, *, page: bytes | None,
+                               page_url: str | None, fetched_at: datetime | None,
+                               permission_document: bytes | None,
+                               permission_checked_at: datetime | None,
+                               dry_run: bool = True) -> MetadataPublishResult:
+        """One explicit Candidate only; never scans or claims the Full Raw queue.
+
+        The caller supplies fresh authorized page/permission bytes. A timeout
+        is reconciled by the completion ledger; an unreadable result is UNKNOWN.
+        """
+        if self.metadata is None:
+            raise RuntimeError("Metadata publication repository unavailable")
+        if not dry_run and not (self.adapter.publish_enabled and
+                                self.metadata_publish_enabled):
+            raise RuntimeError("Metadata publishing is disabled")
+        tables = self.adapter.tables
+        if not dry_run:
+            prior = tables.get_metadata_completion(candidate_id)
+            if prior is not None:
+                service_id = UUID(prior["opportunity_id"])
+                row = tables.get_opportunity(service_id)
+                if (prior.get("candidate_id") != str(candidate_id) or
+                        prior.get("disposition") != "PUBLISHED" or row is None or
+                        row.get("external_id") != f"runtime_agent_metadata:{candidate_id}"):
+                    return MetadataPublishResult(candidate_id, "UNKNOWN",
+                                                 reasons=("COMPLETION_READBACK_MISMATCH",))
+                return MetadataPublishResult(candidate_id, "ALREADY_PUBLISHED", service_id)
+        at = datetime.now(timezone.utc)
+        if dry_run:
+            outcome = self.metadata.assess(
+                candidate_id, page=page, page_url=page_url, fetched_at=fetched_at,
+                permission_document=permission_document,
+                permission_checked_at=permission_checked_at, now=at)
+        else:
+            outcome = self.metadata.assess_and_record(
+                candidate_id, decision_id=uuid4(), page=page, page_url=page_url,
+                fetched_at=fetched_at, permission_document=permission_document,
+                permission_checked_at=permission_checked_at, now=at)
+        source, approval = self.metadata.publication_context(candidate_id)
+        plan = self.adapter.dry_run_metadata(outcome, source=source,
+                                             approval=approval,
+                                             at=datetime.now(timezone.utc))
+        if not plan.eligible or plan.record is None or plan.evidence is None:
+            return MetadataPublishResult(candidate_id, "HELD", reasons=plan.reasons)
+        if dry_run:
+            return MetadataPublishResult(candidate_id, "DRY_RUN")
+        try:
+            service_id, _ = tables.publish_metadata_atomic(
+                candidate_id, plan.record, plan.evidence)
+        except Exception:
+            # The RPC may have committed before its response was lost. A
+            # missing/failed readback does not turn uncertainty into success.
+            try:
+                prior = tables.get_metadata_completion(candidate_id)
+                if prior is not None:
+                    service_id = UUID(prior["opportunity_id"])
+                    row = tables.get_opportunity(service_id)
+                    if (prior.get("disposition") == "PUBLISHED" and row is not None and
+                            row.get("external_id") ==
+                            f"runtime_agent_metadata:{candidate_id}"):
+                        return MetadataPublishResult(candidate_id, "ALREADY_PUBLISHED",
+                                                     service_id)
+            except Exception:
+                pass
+            return MetadataPublishResult(candidate_id, "UNKNOWN",
+                                         reasons=("RPC_RESULT_UNCONFIRMED",))
+        prior = tables.get_metadata_completion(candidate_id)
+        row = tables.get_opportunity(service_id)
+        if (prior is None or prior.get("opportunity_id") != str(service_id) or
+                prior.get("disposition") != "PUBLISHED" or row is None or
+                row.get("external_id") != f"runtime_agent_metadata:{candidate_id}"):
+            return MetadataPublishResult(candidate_id, "UNKNOWN",
+                                         reasons=("COMPLETION_READBACK_MISMATCH",))
+        return MetadataPublishResult(candidate_id, "PUBLISHED", service_id)
 
     def _candidate(self, candidate_id: UUID):
         queue = self.ledger.get(candidate_id)

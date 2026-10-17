@@ -7,7 +7,7 @@ fresh duplicate snapshot; no runtime adapter currently supplies those.
 """
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from enum import StrEnum
 from urllib.parse import urlsplit
@@ -20,9 +20,12 @@ from agent_collect.discovery.evidence import EvidenceClaim, TimePrecision, _repl
 from agent_collect.discovery.quality import PageType
 from agent_collect.extraction.preprocess import preprocess_html
 from agent_collect.extraction.validation import parse_explicit_datetime, validated_calendar_date
+from agent_collect.metadata.category_policy import (
+    BASE_REQUIRED, EVENT_FIELDS, category_policy,
+)
 from agent_collect.quality_gate.gate import PublishGate
 from agent_collect.quality_gate.models import (
-    DuplicateRecord, DuplicateStatus, GateDecision, QualityCandidate,
+    DuplicateRecord, DuplicateStatus, GateDecision, GateStatus, QualityCandidate,
     QualityDuplicateResult, QualityVerification,
 )
 from agent_collect.registry.service import canonicalize_url
@@ -33,14 +36,6 @@ from agent_collect.schemas.status import SourceStatus, VerificationStatus
 _KST = ZoneInfo("Asia/Seoul")
 _MAX_PAGE_BYTES = 1_048_576
 _MAX_AGE = timedelta(minutes=15)
-_REQUIRED = (
-    "title", "summary", "organizer", "official_url", "application_start",
-    "application_deadline", "event_start", "event_end", "application_method",
-    "category",
-)
-_DATE_FIELDS = frozenset({
-    "application_start", "application_deadline", "event_start", "event_end",
-})
 def _same_url(left: str, right: str) -> bool:
     try:
         validate_target_url(left)
@@ -185,6 +180,8 @@ class MetadataOutcome:
     reasons: tuple[str, ...]
     raw_document_id: None = None
     publish_queue_written: bool = False
+    field_precisions: dict[str, TimePrecision] = field(default_factory=dict)
+    field_references: dict[str, str] = field(default_factory=dict)
 
 
 class MetadataEvidenceResolver:
@@ -209,6 +206,7 @@ class MetadataEvidenceResolver:
         reasons: list[str] = []
         values: dict[str, str] = {}
         refs: list[str] = []
+        field_refs: dict[str, str] = {}
         precision: dict[str, TimePrecision] = {}
         permitted = False
         if candidate.cohort not in {"synthetic", "operational"}:
@@ -242,10 +240,13 @@ class MetadataEvidenceResolver:
         else:
             prepared = preprocess_html(page, source_url=page_url,
                                        max_input_chars=12000)
-        for name in _REQUIRED:
+        # Resolve the category only after replay; the claimed category never
+        # relaxes Source permission or the recruitment window.
+        for name in BASE_REQUIRED + EVENT_FIELDS:
             fact = candidate.facts.get(name)
             if fact is None:
-                reasons.append(f"{name}:missing_evidence")
+                if name in BASE_REQUIRED:
+                    reasons.append(f"{name}:missing_evidence")
                 continue
             if (policy is None or fact.access_policy_digest != policy.permission_digest or
                     fact.observed_at.tzinfo is None or
@@ -275,7 +276,16 @@ class MetadataEvidenceResolver:
                 continue
             values[name] = value
             precision[name] = time_precision
-            refs.append(f"{canonicalize_url(page_url)}#{fact.evidence_reference}")
+            field_refs[name] = f"{canonicalize_url(page_url)}#{fact.evidence_reference}"
+            refs.append(field_refs[name])
+
+        category = category_policy(values.get("category"))
+        if category is None:
+            reasons.append("category:unsupported_or_unverified")
+        elif category.event_window_required:
+            for name in EVENT_FIELDS:
+                if name not in candidate.facts:
+                    reasons.append(f"{name}:missing_evidence")
 
         if (policy is not None and "organizer" in values and
                 " ".join(values["organizer"].casefold().split()) !=
@@ -303,7 +313,9 @@ class MetadataEvidenceResolver:
                                       end_of_day=False) if event_start else None)
         event_end_at = (_time_value(event_end, precision.get("event_end"),
                                     end_of_day=True) if event_end else None)
-        if (event_start_at is None or event_end_at is None or
+        if ((category is not None and category.event_window_required) or
+                event_start is not None or event_end is not None) and (
+                event_start_at is None or event_end_at is None or
                 event_end_at < event_start_at):
             reasons.append("event_window_invalid")
 
@@ -320,7 +332,8 @@ class MetadataEvidenceResolver:
         }
         quality = QualityCandidate(
             candidate.id, candidate.source_id, None, None,
-            candidate.official_url, fields, True,
+            candidate.official_url, fields,
+            category is not None and category.publish_gate_supported,
             min((candidate.facts[name].confidence for name in values),
                 default=0.0), "METADATA_REPLAYED",
             {"evidence_mode": "METADATA_FIRST", "cohort": candidate.cohort},
@@ -349,16 +362,27 @@ class MetadataEvidenceResolver:
              else VerificationStatus.REVIEW_REQUIRED.value),
             quality.confidence, tuple(dict.fromkeys(reasons)),
             {"evidence_mode": "METADATA_FIRST",
+             "category": category.category.value if category else None,
+             "event_window_required": category.event_window_required if category else None,
+             "publish_gate_supported": category.publish_gate_supported if category else False,
              "access_policy_digest": policy.permission_digest if policy else None,
              "rechecked_at": fetched_at.isoformat() if fetched_at else None,
              "time_precision": window_precision.value,
              "duplicate_status": duplicate.status.value},
             tuple(refs), now,
         )
-        gate = self.gate.decide(quality, duplicate, verification)
+        if category is not None and category.category.value == "conference":
+            gate = self.gate.decide(quality, duplicate, verification)
+        else:
+            gate = self.gate.decide_metadata(
+                quality, duplicate, verification,
+                required_fields=category.required_fields if category else BASE_REQUIRED,
+                service_slug=category.service_slug if category else None,
+            )
         return MetadataOutcome(candidate.id, candidate.source_id, candidate.cohort,
                                verification, duplicate, gate,
-                               window_precision, values, verification.reasons)
+                               window_precision, values, verification.reasons,
+                               field_precisions=precision, field_references=field_refs)
 
 
 def _time_value(value: str | None, precision: TimePrecision | None, *,
@@ -394,7 +418,12 @@ def metadata_metrics(outcomes: tuple[MetadataOutcome, ...], *,
     if cohort not in {"synthetic", "operational"} or any(
             row.cohort != cohort for row in outcomes):
         raise ValueError("metadata metrics cannot mix synthetic and operational cohorts")
-    resolved = sum(len(row.values) == len(_REQUIRED) for row in outcomes)
+    resolved = sum(
+        policy is not None and
+        all(name in row.values for name in policy.required_fields)
+        for row in outcomes
+        for policy in (category_policy(row.values.get("category")),)
+    )
     verified = sum(row.verification.status == VerificationStatus.VERIFIED.value
                    for row in outcomes)
     ready = sum(row.gate.status.value == "PUBLISH_READY" for row in outcomes)

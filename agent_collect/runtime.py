@@ -449,6 +449,9 @@ class AgentRuntime:
             adapter=self.service_db_adapter(), worker_id=worker_id,
             max_jobs=self.settings.publish_max_jobs_per_run,
             lease_seconds=self.settings.publish_lease_seconds,
+            metadata=self.metadata_evidence(),
+            metadata_publish_enabled=(self.settings.publish_enabled and
+                                      self.settings.publish_worker_enabled),
         )
 
     def automation_runtime(self, raw_dir: Path, *, worker_id: str) -> AutomationRuntime:

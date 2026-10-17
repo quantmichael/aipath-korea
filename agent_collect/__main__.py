@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -83,6 +84,18 @@ def _parser() -> argparse.ArgumentParser:
     publish_mode.add_argument("--dry-run", action="store_true")
     publish_mode.add_argument("--once", action="store_true")
     publish_worker.add_argument("--worker-id")
+
+    metadata_publish = commands.add_parser(
+        "metadata-publish", help="Process exactly one reviewed Metadata Candidate")
+    metadata_mode = metadata_publish.add_mutually_exclusive_group(required=True)
+    metadata_mode.add_argument("--dry-run", action="store_true")
+    metadata_mode.add_argument("--once", action="store_true")
+    metadata_publish.add_argument("--candidate-id", required=True, type=UUID)
+    metadata_publish.add_argument("--page-file", required=True, type=Path)
+    metadata_publish.add_argument("--page-url", required=True)
+    metadata_publish.add_argument("--fetched-at", required=True)
+    metadata_publish.add_argument("--permission-file", required=True, type=Path)
+    metadata_publish.add_argument("--permission-checked-at", required=True)
 
     automation_status = commands.add_parser("automation-status", help="Show fail-closed automation configuration")
     automation_status.add_argument("--live", action="store_true", help="Include bounded read-only DB due/lease status")
@@ -285,6 +298,30 @@ def main(argv: list[str] | None = None) -> int:
                               "failed_count": summary.failed_count,
                               "previews": list(summary.previews)}))
             return 0 if summary.failed_count == 0 else 1
+        if args.command == "metadata-publish":
+            if args.once and not (runtime.settings.publish_enabled and
+                                  runtime.settings.publish_worker_enabled):
+                raise RuntimeError("Metadata publishing is disabled")
+            fetched_at = datetime.fromisoformat(args.fetched_at.replace("Z", "+00:00"))
+            checked_at = datetime.fromisoformat(
+                args.permission_checked_at.replace("Z", "+00:00"))
+            if fetched_at.tzinfo is None or checked_at.tzinfo is None:
+                raise ValueError("metadata evidence timestamps must be timezone-aware")
+            if (args.page_file.stat().st_size > 1_048_576 or
+                    args.permission_file.stat().st_size > 1_048_576):
+                raise ValueError("metadata evidence file too large")
+            result = runtime.publish_worker(
+                worker_id=f"metadata-cli-{uuid4()}").run_metadata_candidate(
+                    args.candidate_id, page=args.page_file.read_bytes(),
+                    page_url=args.page_url, fetched_at=fetched_at,
+                    permission_document=args.permission_file.read_bytes(),
+                    permission_checked_at=checked_at, dry_run=args.dry_run)
+            print(json.dumps({"candidate_id": str(result.candidate_id),
+                              "status": result.status,
+                              "opportunity_id": str(result.opportunity_id)
+                              if result.opportunity_id else None,
+                              "reasons": list(result.reasons)}))
+            return 0 if result.status in {"DRY_RUN", "PUBLISHED", "ALREADY_PUBLISHED"} else 1
         if args.command == "automation-run":
             if (args.once and runtime.settings.raw_storage_provider == "local" and
                     (runtime.settings.collection_worker_enabled or

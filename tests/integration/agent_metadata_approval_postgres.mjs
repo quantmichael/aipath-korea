@@ -27,6 +27,17 @@ try {
     '014_metadata_first_draft','015_metadata_approval_runtime_draft'];
   for(const name of names)
     await db.query(readFileSync(root+'/agent_collect/migrations/'+name+'.sql','utf8'));
+  const unscoped=randomUUID();
+  await db.query("insert into public.agent_metadata_reviewers(user_id,granted_by)"+
+    " values($1,'unscoped fixture')",[unscoped]);
+  const scopeSql=readFileSync(root+'/agent_collect/migrations/'+
+    '016_metadata_reviewer_source_scope.sql','utf8');
+  await assert.rejects(db.query(scopeSql),/agent_metadata_active_reviewer_scoped/);
+  await db.query('rollback');
+  await db.query('delete from public.agent_metadata_reviewers where user_id=$1',[unscoped]);
+  await db.query(scopeSql);
+  await db.query(readFileSync(root+'/agent_collect/migrations/'+
+    '017_metadata_service_category_gate.sql','utf8'));
   const source=randomUUID(),reviewer=randomUUID(),outsider=randomUUID();
   const url='https://fixture.example.org/notices/approval-test';
   await db.query("insert into public.agent_sources(id,name,source_url,canonical_url,source_type)"+
@@ -34,8 +45,8 @@ try {
   await db.query("select public.agent_review_source($1,'CANDIDATE','REVIEW',"+
     "'synthetic-fixture-reviewer','isolated review','REVIEW_STARTED',$2)",
     [source,randomUUID()]);
-  await db.query("insert into public.agent_metadata_reviewers(user_id,granted_by)"+
-    "values($1,'isolated-postgres-fixture')",[reviewer]);
+  await db.query("insert into public.agent_metadata_reviewers(user_id,source_id,granted_by)"+
+    "values($1,$2,'isolated-postgres-fixture')",[reviewer,source]);
   const policy={official_url:url,expires_at:'2027-12-31T00:00:00Z',
     permission_url:'https://fixture.example.org/policy',permission_digest:'a'.repeat(64),
     organizer_relationship:'fixture organizer',approved_organizer:'Fixture Lab',
@@ -61,6 +72,7 @@ try {
   const facts=Object.fromEntries(names10.map(x=>[x,x==='official_url'?url:'Synthetic '+x]));
   facts.application_start='2027-01-01'; facts.application_deadline='2027-04-01';
   facts.event_start='2027-04-02'; facts.event_end='2027-04-03';
+  facts.category='conference';
   const evidence=Object.fromEntries(names10.map(x=>[x,{reference:'B001'}]));
   const testTime=new Date().toISOString();
   await db.query('set role service_role');
@@ -98,6 +110,24 @@ try {
   assert.equal((await record()).rows[0].id,candidate);
   assert.equal((await db.query('select status from public.agent_metadata_candidates where id=$1',
     [candidate])).rows[0].status,'PUBLISH_READY');
+  await db.query('reset role');
+  const readyInsert=(readyFacts,readyEvidence)=>db.query(
+    'insert into public.agent_metadata_candidates '+
+    '(source_id,approval_id,cohort,official_url,facts,field_evidence,status,'+
+    'verification,duplicate_result,gate_decision,discovered_at,verified_at) '+
+    "values($1,$2,'operational',$3,$4,$5,'PUBLISH_READY',$6,$7,$8,$9,$9)",
+    [source,approval,url,readyFacts,readyEvidence,
+      {status:'VERIFIED'}, {status:'UNIQUE'}, {status:'PUBLISH_READY'}, testTime]);
+  const optionalFacts={...facts,category:'competition',
+    application_start:'2027-02-01',application_deadline:'2027-05-01'};
+  delete optionalFacts.event_start; delete optionalFacts.event_end;
+  const optionalEvidence={...evidence};
+  delete optionalEvidence.event_start; delete optionalEvidence.event_end;
+  await readyInsert(optionalFacts,optionalEvidence);
+  await assert.rejects(readyInsert({...optionalFacts,category:'grant',
+    application_start:'2027-02-02'},optionalEvidence),/agent_metadata_candidate_gate/);
+  await assert.rejects(readyInsert({...optionalFacts,category:'conference',
+    application_start:'2027-02-03'},optionalEvidence),/agent_metadata_candidate_gate/);
   await db.query('reset role; set role authenticated');
   await db.query("select set_config('request.jwt.claim.sub',$1,false)",[reviewer]);
   const revokeId=randomUUID();
@@ -125,6 +155,22 @@ try {
   await db.query("select public.agent_review_source($1,'CANDIDATE','REVIEW',"+
     "'synthetic-fixture-reviewer','isolated concurrency','REVIEW_STARTED',$2)",
     [source2,randomUUID()]);
+  await db.query('set role authenticated');
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[reviewer]);
+  await assert.rejects(db.query('select public.agent_metadata_approve($1,$2,$3,$4)',
+    [randomUUID(),source2,{...policy,official_url:url2},'wrong Source scope']),
+    /source-scoped metadata reviewer required/);
+  await db.query('reset role');
+  assert.equal((await db.query('select count(*)::integer as n from public.agent_metadata_approval_events'+
+    ' where source_id=$1',[source2])).rows[0].n,0);
+  assert.equal((await db.query('select count(*)::integer as n from public.agent_metadata_source_approvals'+
+    ' where source_id=$1',[source2])).rows[0].n,0);
+  await assert.rejects(db.query('update public.agent_metadata_reviewers set source_id=$1'+
+    ' where user_id=$2',[source2,reviewer]),/deactivate reviewer before changing Source scope/);
+  await db.query('update public.agent_metadata_reviewers set active=false where user_id=$1',
+    [reviewer]);
+  await db.query('update public.agent_metadata_reviewers set source_id=$1,active=true'+
+    ' where user_id=$2',[source2,reviewer]);
   db2=epg.getPgClient(); await db2.connect();
   for(const client of [db,db2]) {
     await client.query('set role authenticated');
@@ -138,6 +184,18 @@ try {
   await db.query('reset role'); await db2.query('reset role');
   assert.equal((await db.query('select count(*)::integer as n from public.agent_metadata_approval_events'+
     ' where source_id=$1 and action=\'APPROVED\'',[source2])).rows[0].n,1);
+  await db.query('update public.agent_metadata_reviewers set active=false where user_id=$1',
+    [reviewer]);
+  await db.query('update public.agent_metadata_reviewers set source_id=$1,active=true'+
+    ' where user_id=$2',[source,reviewer]);
+  await db.query('set role authenticated');
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[reviewer]);
+  await assert.rejects(db.query('select public.agent_metadata_revoke($1,$2,$3)',
+    [randomUUID(),left.rows[0].id,'wrong Source scope revocation']),
+    /source-scoped metadata reviewer required/);
+  await db.query('reset role');
+  assert.equal((await db.query('select count(*)::integer as n from public.agent_metadata_approval_events'+
+    ' where source_id=$1 and action=\'REVOKED\'',[source2])).rows[0].n,0);
   console.log('PASS metadata reviewer auth, audit, idempotency, RPC-only writes, revocation, RLS');
 } finally {
   if(db2) await db2.end();

@@ -16,6 +16,9 @@ from agent_collect.adapters.service_db.mapping import (
     ConflictDecision, ConflictStatus, ServiceTables, final_conflict, map_source,
     source_creation_eligible, stable_external_id, stable_slug,
 )
+from agent_collect.adapters.service_db.metadata_contract import (
+    MetadataRegistrationPreview, preview_metadata_registration,
+)
 from agent_collect.adapters.service_db.policy import (
     DeterministicPublicationStatusResolver, TemporalAssessment, assess_temporal,
 )
@@ -26,6 +29,8 @@ from agent_collect.dedup.engine import normalize_title
 from agent_collect.repositories.publish_ledger import PublishLedger, QueueAuthorization
 from agent_collect.schemas.models import DuplicateMethod, DuplicateResult, PublishCandidate, Vertical
 from agent_collect.schemas.status import VerificationStatus
+from agent_collect.metadata.evidence import MetadataAccessPolicy, MetadataOutcome
+from agent_collect.schemas.models import Source
 from opportunity_status.evidence import build_agent_evidence
 
 
@@ -96,6 +101,17 @@ class SupabaseServiceDBAdapter:
         self.publish_threshold = publish_threshold
         self.publish_enabled = publish_enabled
         self.status_resolver = DeterministicPublicationStatusResolver()
+
+    def dry_run_metadata(self, outcome: MetadataOutcome, *, source: Source | None,
+                         approval: MetadataAccessPolicy | None,
+                         at: datetime | None = None) -> MetadataRegistrationPreview:
+        """Check an atomic RPC envelope without queue activity or Service writes."""
+        return preview_metadata_registration(
+            outcome, source=source, approval=approval,
+            service_sources=self.tables.list_sources(),
+            service_categories=self.tables.list_categories(),
+            at=at or datetime.now(timezone.utc),
+        )
 
     def dry_run(self, candidate: PublishCandidate, *, at: datetime | None = None,
                 preclaimed: bool = False, retryable: bool = False) -> ServicePublishPlan:

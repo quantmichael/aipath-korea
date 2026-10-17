@@ -5,6 +5,7 @@
 opportunity_status/*
 !opportunity_status/__init__.py
 !opportunity_status/evidence.py
+!opportunity_status/simulation.py
 !requirements.agent.txt
 !Dockerfile.agent
 agent_collect/migrations/

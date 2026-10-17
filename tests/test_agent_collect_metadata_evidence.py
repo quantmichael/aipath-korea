@@ -13,6 +13,7 @@ from agent_collect.metadata.evidence import (
     DuplicateSnapshot, EvidenceType, MetadataAccessPolicy, MetadataCandidate,
     MetadataEvidenceResolver, MetadataFact, metadata_metrics,
 )
+from agent_collect.metadata.category_policy import category_policy
 from agent_collect.quality_gate.models import DuplicateRecord, GateStatus
 from agent_collect.schemas.models import Source, SourceType
 from agent_collect.schemas.status import SourceStatus
@@ -24,21 +25,23 @@ PERMISSION = b"Synthetic test-only metadata use and transient recheck permission
 DIGEST = hashlib.sha256(PERMISSION).hexdigest()
 
 
-def fixture(*, exact=False):
-    start = "2027-01-04T09:00:00+09:00" if exact else "2027-01-04"
-    deadline = "2027-04-13T18:00:00+09:00" if exact else "2027-04-13"
+def fixture(*, exact=False, category="conference", event_dates=True,
+            application_start=None, application_deadline=None, observed_at=NOW):
+    start = application_start or ("2027-01-04T09:00:00+09:00" if exact else "2027-01-04")
+    deadline = application_deadline or ("2027-04-13T18:00:00+09:00" if exact else "2027-04-13")
     event_start = "2027-04-14T09:00:00+09:00" if exact else "2027-04-14"
     event_end = "2027-04-16T18:00:00+09:00" if exact else "2027-04-16"
+    event_content = (f"<p>Event starts {event_start}</p>"
+                     f"<p>Event ends {event_end}</p>") if event_dates else ""
     content = (
         "<h1>Synthetic AI Expo 2027</h1>"
         "<p>A synthetic opportunity for isolated tests.</p>"
         "<p>Organizer: Fixture Lab</p>"
         f"<p>Application opens {start}</p>"
         f"<p>Application deadline {deadline}</p>"
-        f"<p>Event starts {event_start}</p>"
-        f"<p>Event ends {event_end}</p>"
+        f"{event_content}"
         "<p>Apply via the official form</p>"
-        "<p>Category: conference</p>"
+        f"<p>Category: {category}</p>"
     ).encode()
     prepared = preprocess_html(content, source_url=URL, max_input_chars=12000)
     lookup = {
@@ -47,11 +50,11 @@ def fixture(*, exact=False):
         "organizer": "Fixture Lab",
         "application_start": start,
         "application_deadline": deadline,
-        "event_start": event_start,
-        "event_end": event_end,
         "application_method": "Apply via the official form",
-        "category": "conference",
+        "category": category,
     }
+    if event_dates:
+        lookup.update(event_start=event_start, event_end=event_end)
     facts = {
         name: MetadataFact(
             value, URL, EvidenceType.PAGE_BLOCK,
@@ -59,23 +62,23 @@ def fixture(*, exact=False):
                  if value in block.text),
             next(block.text for block in prepared.evidence_blocks
                  if value in block.text),
-            NOW, 0.95, DIGEST,
+            observed_at, 0.95, DIGEST,
         )
         for name, value in lookup.items()
     }
     facts["official_url"] = MetadataFact(
-        URL, URL, EvidenceType.PAGE_LINK, "L000", "", NOW, 0.95, DIGEST)
+        URL, URL, EvidenceType.PAGE_LINK, "L000", "", observed_at, 0.95, DIGEST)
     source = Source(uuid4(), "Synthetic fixture", URL, SourceType.OFFICIAL,
                     SourceStatus.REVIEW, NOW, canonical_url=URL)
     policy = MetadataAccessPolicy(
-        source.id, URL, "synthetic-fixture-reviewer", NOW - timedelta(days=1),
-        NOW + timedelta(days=1), "https://fixture.example.org/policy",
+        source.id, URL, "synthetic-fixture-reviewer", observed_at - timedelta(days=1),
+        observed_at + timedelta(days=1), "https://fixture.example.org/policy",
         DIGEST, "fixture organizer", "Fixture Lab", PageType.INDIVIDUAL_NOTICE,
         True, True, True, True, True,
         False, False, "https://fixture.example.org", "/",
     )
-    candidate = MetadataCandidate(uuid4(), source.id, URL, facts, NOW, "synthetic")
-    duplicates = DuplicateSnapshot((), (), NOW, True, True)
+    candidate = MetadataCandidate(uuid4(), source.id, URL, facts, observed_at, "synthetic")
+    duplicates = DuplicateSnapshot((), (), observed_at, True, True)
     return source, policy, candidate, content, duplicates
 
 
@@ -88,7 +91,7 @@ def assess(data, **changes):
         fetched_at=changes.get("fetched_at", NOW),
         permission_document=changes.get("permission_document", PERMISSION),
         permission_checked_at=changes.get("permission_checked_at", NOW),
-        duplicates=changes.get("duplicates", duplicates), now=NOW,
+        duplicates=changes.get("duplicates", duplicates), now=changes.get("now", NOW),
     )
 
 
@@ -102,6 +105,81 @@ def test_synthetic_metadata_replays_and_reuses_publish_gate(exact, precision):
     assert outcome.gate.status is GateStatus.PUBLISH_READY
     assert outcome.raw_document_id is None
     assert outcome.publish_queue_written is False
+
+
+@pytest.mark.parametrize("category,event_required", [
+    ("conference", True), ("exhibition", True),
+    ("competition", False), ("hackathon", True),
+    ("education", True), ("research", False),
+    ("grant", False), ("program", False),
+    ("meetup", True), ("job", False),
+])
+def test_category_evidence_and_service_gate_are_separate(category, event_required):
+    mapped = category_policy(category).service_slug is not None
+    no_event = assess(fixture(category=category, event_dates=False))
+    assert no_event.duplicate.status.value == "UNIQUE"
+    assert no_event.verification.status == (
+        "REVIEW_REQUIRED" if event_required else "VERIFIED")
+    assert no_event.gate.status is (
+        GateStatus.PUBLISH_READY if mapped and not event_required
+        else GateStatus.REVIEW_REQUIRED)
+    if not mapped:
+        assert "CATEGORY_SERVICE_MAPPING_UNAVAILABLE" in no_event.gate.reasons
+    if event_required:
+        assert "event_start:missing_evidence" in no_event.reasons
+    with_event = assess(fixture(category=category, event_dates=True))
+    assert with_event.verification.status == "VERIFIED"
+    assert with_event.gate.status is (
+        GateStatus.PUBLISH_READY if mapped else GateStatus.REVIEW_REQUIRED)
+
+
+def test_optional_event_evidence_is_replayed_and_invalid_pair_blocks():
+    data = fixture(category="grant", event_dates=True)
+    facts = dict(data[2].facts)
+    del facts["event_end"]
+    outcome = assess(data, candidate=replace(data[2], facts=facts))
+    assert outcome.verification.status == "REVIEW_REQUIRED"
+    assert "event_window_invalid" in outcome.reasons
+
+
+@pytest.mark.parametrize("category", ["grant", "conference"])
+def test_all_categories_keep_recruitment_dates_required(category):
+    data = fixture(category=category, event_dates=(category == "conference"))
+    facts = dict(data[2].facts)
+    del facts["application_deadline"]
+    outcome = assess(data, candidate=replace(data[2], facts=facts))
+    assert outcome.verification.status == "REVIEW_REQUIRED"
+    assert "application_deadline:missing_evidence" in outcome.reasons
+
+
+def test_unknown_category_is_not_publishable():
+    outcome = assess(fixture(category="unknown", event_dates=True))
+    assert outcome.verification.status == "REVIEW_REQUIRED"
+    assert "category:unsupported_or_unverified" in outcome.reasons
+    assert outcome.gate.status is GateStatus.REVIEW_REQUIRED
+
+
+def test_date_only_deadline_closes_at_kst_midnight_without_invented_clock():
+    before = datetime(2026, 10, 15, 14, 59, 59, tzinfo=timezone.utc)
+    data = fixture(category="grant", event_dates=False,
+                   application_start="2026-10-01",
+                   application_deadline="2026-10-15", observed_at=before)
+    current = assess(data, now=before, fetched_at=before,
+                     permission_checked_at=before)
+    assert current.verification.status == "VERIFIED"
+    after = before + timedelta(seconds=1)
+    closed = assess(data, now=after, fetched_at=before,
+                    permission_checked_at=before)
+    assert closed.verification.status == "REVIEW_REQUIRED"
+    assert "application_closed" in closed.reasons
+
+
+def test_mixed_recruitment_precision_stays_on_review_hold():
+    data = fixture(category="grant", event_dates=False,
+                   application_deadline="2027-04-13T18:00:00+09:00")
+    outcome = assess(data)
+    assert outcome.verification.status == "REVIEW_REQUIRED"
+    assert "application_time_unconfirmed" in outcome.reasons
 
 
 def test_observed_revocation_blocks_even_with_client_clock_skew():

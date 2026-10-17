@@ -5,6 +5,8 @@ from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from agent_collect.discovery.followup import FollowupLead
 from agent_collect.metadata.extraction import extract_labelled_metadata
 from agent_collect.metadata.supabase import SupabaseMetadataEvidence
@@ -222,6 +224,36 @@ def test_followup_page_extracts_labels_and_replays_before_narrow_rpcs():
     assert [name for name, _ in calls] == ["create", "record"]
     assert set(calls[0][1]["facts"]) == set(candidate.facts)
     assert calls[0][1]["facts"]["application_deadline"] == "2027-04-13"
+
+
+@pytest.mark.parametrize("category,requires_event", [
+    ("exhibition", True), ("research", False),
+    ("grant", False), ("program", False), ("job", False),
+])
+def test_sdk_holds_unmapped_category_even_when_evidence_replays(category, requires_event):
+    source, policy, _, _, duplicates = fixture()
+    bridge = SupabaseMetadataEvidence(ApprovalClient({
+        **row_from_policy(policy), "cohort": "operational"}))
+    bridge.sources.get = lambda _source_id: source
+    bridge._policy = lambda _row, cohort: replace(
+        policy, approved_principal_id=uuid4(), approval_event_id=uuid4())
+    bridge._duplicates = lambda now: duplicates
+    writes = []
+    bridge.create_candidate = lambda **kwargs: writes.append(kwargs)
+    page = LABELLED_PAGE.replace(b"Category: conference", f"Category: {category}".encode())
+    if not requires_event:
+        page = page.replace(b"<p>Event starts: 2027-04-14</p>", b"").replace(
+            b"<p>Event ends: 2027-04-16</p>", b"")
+    result = bridge.process_followup_lead(
+        lead=_lead(URL), approval_id=uuid4(), facts=None,
+        page=page, fetched_at=NOW, permission_document=PERMISSION,
+        permission_checked_at=NOW, request_id=uuid4(),
+        decision_id=uuid4(), now=NOW,
+    )
+    assert result.outcome.verification.status == "VERIFIED"
+    assert result.outcome.gate.status.value == "REVIEW_REQUIRED"
+    assert result.stored_candidate_id is None
+    assert writes == []
 
 
 def test_followup_page_ambiguous_label_holds_without_write():

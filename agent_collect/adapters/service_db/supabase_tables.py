@@ -25,6 +25,9 @@ class SupabaseServiceTables:
     def list_sources(self) -> list[dict[str, Any]]:
         return self._bounded("sources", "id,name,homepage_url,is_active")
 
+    def list_categories(self) -> list[dict[str, Any]]:
+        return self._bounded("categories", "id,slug,is_active")
+
     def get_conference_category(self) -> dict[str, Any] | None:
         self.read_count += 1
         rows = (self.client.table("categories").select("id,slug,is_active")
@@ -60,6 +63,27 @@ class SupabaseServiceTables:
         if record is None:
             raise RuntimeError("atomic Opportunity registration readback missing")
         return record, rows[0]["disposition"]
+
+    def get_metadata_completion(self, candidate_id: UUID) -> dict[str, Any] | None:
+        self.read_count += 1
+        rows = (self.client.table("agent_metadata_publish_completions")
+                .select("candidate_id,opportunity_id,approval_id,verification_at,published_at,disposition")
+                .eq("candidate_id", str(candidate_id)).limit(1).execute().data or [])
+        return rows[0] if rows else None
+
+    def publish_metadata_atomic(self, candidate_id: UUID, payload: dict[str, Any],
+                                evidence: dict[str, Any]) -> tuple[UUID, str]:
+        """Migration 018 owns registration, time evidence and completion atomically."""
+        self.write_count += 1
+        rows = self.client.rpc("agent_publish_metadata_candidate", {
+            "p_candidate_id": str(candidate_id),
+            "p_record": payload, "p_evidence": evidence,
+        }).execute().data or []
+        if len(rows) != 1 or rows[0].get("disposition") not in {
+            "registered", "already_published"
+        } or not rows[0].get("opportunity_id"):
+            raise RuntimeError("atomic metadata publication response invalid")
+        return UUID(rows[0]["opportunity_id"]), rows[0]["disposition"]
 
     def insert_opportunity(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.write_count += 1

@@ -148,6 +148,22 @@ class SupabaseMetadataEvidence:
         return DuplicateSnapshot(tuple(agent_records), tuple(service_records), now,
                                  agent_complete, service_complete)
 
+    def publication_context(self, candidate_id: UUID):
+        """Read the Candidate's current Source and approval for a bounded dry run."""
+        row = _one(self.client.table("agent_metadata_candidates")
+                   .select("source_id,approval_id,cohort,official_url")
+                   .eq("id", str(candidate_id)))
+        if row is None or row["cohort"] != "operational":
+            raise ValueError("operational metadata Candidate required")
+        source = self.sources.get(UUID(row["source_id"]))
+        approval = _one(self.client.table("agent_metadata_source_approvals")
+                        .select("*").eq("id", row["approval_id"]))
+        policy = (self._policy(approval, cohort="operational")
+                  if approval and approval["source_id"] == row["source_id"] and
+                  approval["official_url"] == row["official_url"] and
+                  approval["cohort"] == "operational" else None)
+        return source, policy
+
     def assess(self, candidate_id: UUID, *, page: bytes | None,
                page_url: str | None, fetched_at: datetime | None,
                permission_document: bytes | None,

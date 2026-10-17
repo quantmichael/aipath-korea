@@ -48,3 +48,36 @@ class PublishGate:
         if reasons:
             return GateDecision(candidate.id, GateStatus.REVIEW_REQUIRED, tuple(dict.fromkeys(reasons)))
         return GateDecision(candidate.id, GateStatus.PUBLISH_READY, ())
+
+    def decide_metadata(self, candidate: QualityCandidate,
+                        duplicate: QualityDuplicateResult,
+                        verification: QualityVerification, *,
+                        required_fields: tuple[str, ...],
+                        service_slug: str | None) -> GateDecision:
+        """Assess replayed metadata without changing the Full Raw Conference gate.
+
+        The Service slug must be an explicit supported mapping. Actual active
+        category, Source identity, and atomic registration are checked later
+        against the Service database; this decision never enqueues a publish.
+        """
+        if verification.candidate_id != candidate.id or duplicate.candidate_id != candidate.id:
+            raise ValueError("quality result candidate mismatch")
+        reasons = list(verification.reasons)
+        if service_slug is None:
+            reasons.append("CATEGORY_SERVICE_MAPPING_UNAVAILABLE")
+        if verification.status == VerificationStatus.REJECTED.value:
+            return GateDecision(candidate.id, GateStatus.REJECTED,
+                                tuple(dict.fromkeys(reasons)))
+        if duplicate.status is not DuplicateStatus.UNIQUE or (
+                verification.status != VerificationStatus.VERIFIED.value):
+            return GateDecision(candidate.id, GateStatus.REVIEW_REQUIRED,
+                                tuple(dict.fromkeys(reasons)))
+        if any(not candidate.value(name) for name in required_fields):
+            reasons.append(ReviewReason.MISSING_REQUIRED_FIELD.value)
+        if not verification.evidence_refs:
+            reasons.append(ReviewReason.INSUFFICIENT_EVIDENCE.value)
+        if verification.confidence < self.threshold:
+            reasons.append(ReviewReason.LOW_CONFIDENCE.value)
+        return GateDecision(candidate.id,
+                            GateStatus.REVIEW_REQUIRED if reasons else GateStatus.PUBLISH_READY,
+                            tuple(dict.fromkeys(reasons)))

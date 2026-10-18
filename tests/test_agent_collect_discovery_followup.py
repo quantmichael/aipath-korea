@@ -84,6 +84,23 @@ class OfficialFollowupTests(unittest.TestCase):
         self.assertEqual(outcome.audit_record()["followup_verified"], 0)
         self.assertEqual(transport.calls[0], ORIGIN + "/robots.txt")
 
+    def test_reviewed_path_scope_blocks_followup_outside_approved_directory(self):
+        root = ORIGIN + "/notices/"
+        transport = FakeTransport({
+            root: page(root, '<a href="/notices/ai">AI 신청</a>'
+                            '<a href="/other/ai">AI 신청</a>'),
+            ORIGIN + "/notices/ai": page(ORIGIN + "/notices/ai",
+                                           '<p>AI 참가 신청</p>'),
+        })
+        reviewed = ReviewedOfficialRoot(ORIGIN, "human:reviewer",
+                                        "official organizer site", "/notices/")
+        outcome = OfficialFollowupExplorer(transport=transport).explore(
+            result(root), reviewed=reviewed, now=NOW)
+        self.assertEqual(outcome.visited_urls,
+                         (ORIGIN + "/notices", ORIGIN + "/notices/ai"))
+        self.assertNotIn(ORIGIN + "/other/ai", transport.calls)
+        self.assertFalse(reviewed.covers(ORIGIN + "/notices/%2e%2e/other"))
+
     def test_robots_denial_blocks_before_page_request(self):
         transport = FakeTransport({}, b"User-agent: *\nDisallow: /\n")
         outcome = OfficialFollowupExplorer(transport=transport).explore(

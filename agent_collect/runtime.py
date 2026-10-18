@@ -1,18 +1,20 @@
 """Runtime assembly for Agent-owned repositories; no Backend imports."""
 
+import hashlib
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Mapping
-from uuid import uuid4
+from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 
 from agent_collect.collectors.planner import CollectionPlanner
 from agent_collect.adapters.service_db.duplicate_lookup import SupabaseServiceDuplicateLookup
 from agent_collect.adapters.service_db.adapter import SupabaseServiceDBAdapter
 from agent_collect.adapters.service_db.supabase_tables import SupabaseServiceTables
 from agent_collect.collectors.runner import CollectionRunner
+from agent_collect.collectors.security import CollectionTransportError
 from agent_collect.config.settings import AgentSettings, load_settings
 from agent_collect.discovery.evaluation import RuleBasedEvaluator
 from agent_collect.discovery.auto_approval import (
@@ -28,8 +30,10 @@ from agent_collect.discovery.goal_supabase import (
     GoalExecutionWorker, GoalPlanningWorker, SupabaseGoalContext, SupabaseGoalPlans,
 )
 from agent_collect.discovery.scheduling_supabase import SupabaseDiscoverySchedules
-from agent_collect.discovery.models import DiscoveryQuery
+from agent_collect.discovery.models import DiscoveryQuery, QueryStatus
+from agent_collect.discovery.followup import FollowupLead, OfficialFollowupExplorer, ReviewedOfficialRoot
 from agent_collect.schemas.models import Vertical
+from agent_collect.schemas.status import SourceStatus
 from agent_collect.discovery.runner import DiscoveryRunner, PromotionGate
 from agent_collect.discovery.quality import SearchQualityEvaluator
 from agent_collect.discovery.evidence_supabase import (
@@ -43,8 +47,8 @@ from agent_collect.extraction.runner import ExtractionRunner
 from agent_collect.normalization.runner import NormalizationRunner
 from agent_collect.metadata.supabase import SupabaseMetadataEvidence
 from agent_collect.quality_gate.runner import QualityGateRunner
-from agent_collect.registry.service import SourceRegistryService
-from agent_collect.registry.approval import SourceApprovalService
+from agent_collect.registry.service import SourceRegistryService, canonicalize_url
+from agent_collect.registry.approval import SourceApprovalService, source_is_collectible
 from agent_collect.repositories.discovery import DiscoveryRepository
 from agent_collect.repositories.discovery_supabase import SupabaseDiscoveryRepository
 from agent_collect.repositories.extraction import ExtractionRepository
@@ -158,6 +162,147 @@ class AgentRuntime:
         if client is None:
             raise RuntimeError("Metadata evidence requires an Agent Supabase client")
         return SupabaseMetadataEvidence(client)
+
+    def process_discovery_metadata(self, query_ids: tuple[str, ...]) -> dict[str, int]:
+        """Handoff only newly searched, individually approved official notices.
+
+        The global Automation lease surrounds this call. No approval, missing
+        audit, changed permission document, or inaccessible page means no
+        Candidate write. Follow-up stays within a separately approved root.
+        """
+        client = getattr(self.sources, "client", None)
+        if client is None:
+            raise RuntimeError("Metadata handoff requires an Agent Supabase client")
+        counts = {"lead_count": 0, "processed_count": 0,
+                  "review_required_count": 0, "publish_ready_count": 0}
+        if not query_ids:
+            return counts
+        metadata = self.metadata_evidence()
+        response = (client.table("agent_metadata_source_approvals")
+                    .select("*", count="exact").eq("cohort", "operational")
+                    .limit(21).execute())
+        approvals = response.data or []
+        if response.count is None or response.count > 20 or response.count != len(approvals):
+            raise RuntimeError("metadata approval scan incomplete")
+        if not approvals:
+            return counts
+        now = datetime.now(timezone.utc)
+        permitted = []
+        for approval in approvals:
+            source = metadata.sources.get(UUID(approval["source_id"]))
+            policy = metadata._policy(approval, cohort="operational")
+            if (source is None or source.status not in {SourceStatus.APPROVED,
+                                                        SourceStatus.ACTIVE} or
+                    policy is None or policy.approved_principal_id is None or
+                    policy.approval_event_id is None or
+                    not policy.permits(source, approval["official_url"], now=now)[0]):
+                continue
+            permitted.append((approval, policy))
+        if not permitted:
+            return counts
+        explorer = OfficialFollowupExplorer(user_agent=self.settings.user_agent)
+        repository = SupabaseDiscoveryRepository(client)
+        seen: set[tuple[str, str]] = set()
+        explored: dict[tuple[str, str, str], tuple[FollowupLead, ...]] = {}
+        for query_id in dict.fromkeys(query_ids):
+            if counts["lead_count"] >= 5:
+                break
+            query = repository.get_query(UUID(query_id))
+            if query is None or query.status is not QueryStatus.SUCCEEDED:
+                continue
+            found = (client.table("agent_search_results")
+                     .select("id", count="exact").eq("query_id", query_id)
+                     .limit(21).execute())
+            rows = found.data or []
+            if found.count is None or found.count > 20 or found.count != len(rows):
+                raise RuntimeError("discovery result scan incomplete")
+            for row in rows:
+                if counts["lead_count"] >= 5:
+                    break
+                result = repository.get_result(UUID(row["id"]))
+                if result is None or result.query_id != query.id:
+                    continue
+                result_url = canonicalize_url(result.canonical_url or result.original_url)
+                for approval, policy in permitted:
+                    if counts["lead_count"] >= 5:
+                        break
+                    target = canonicalize_url(approval["official_url"])
+                    leads: tuple[FollowupLead, ...] = ()
+                    if result_url == target:
+                        leads = (FollowupLead(
+                            approval["official_url"], result_url, 1, result.title,
+                            "INDIVIDUAL_NOTICE", None, None, "UNKNOWN", "UNKNOWN",
+                            None, "authenticated_metadata_approval"),)
+                    else:
+                        plan = result.provider_metadata.get("quality_followup_plan")
+                        if (not isinstance(plan, dict) or
+                                plan.get("kind") != "INDIVIDUAL_NOTICE_SEARCH" or
+                                plan.get("source_search_result_id") != str(result.id)):
+                            continue
+                        root_source = self.sources.find_by_canonical_url(result_url)
+                        if root_source is None or not source_is_collectible(root_source):
+                            continue
+                        reviewed = ReviewedOfficialRoot(
+                            policy.scope_origin, policy.reviewer,
+                            policy.organizer_relationship, policy.path_prefix)
+                        if not reviewed.covers(result_url):
+                            continue
+                        scope = (result.id.hex, policy.scope_origin, policy.path_prefix)
+                        if scope not in explored:
+                            if len(explored) >= 5:
+                                continue
+                            explored[scope] = explorer.explore(
+                                result, reviewed=reviewed,
+                                now=datetime.now(timezone.utc)).leads
+                        leads = explored[scope]
+                    for lead in leads:
+                        identity = (str(approval["id"]), canonicalize_url(lead.url))
+                        if (lead.page_type != "INDIVIDUAL_NOTICE" or
+                                identity[1] != target or identity in seen):
+                            continue
+                        seen.add(identity)
+                        counts["lead_count"] += 1
+                        reviewed = ReviewedOfficialRoot(
+                            policy.scope_origin, policy.reviewer,
+                            policy.organizer_relationship, policy.path_prefix)
+                        try:
+                            # Both GETs use the existing robots-aware, DNS-pinned
+                            # transport. The permission URL is exact and hashed.
+                            permission_root = ReviewedOfficialRoot(
+                                policy.scope_origin, policy.reviewer,
+                                policy.organizer_relationship)
+                            permission = explorer._fetch(policy.permission_url, permission_root)
+                            checked_at = datetime.now(timezone.utc)
+                            if (hashlib.sha256(permission.content).hexdigest() !=
+                                    policy.permission_digest):
+                                counts["review_required_count"] += 1
+                                continue
+                            page = explorer._fetch(lead.url, reviewed)
+                            fetched_at = datetime.now(timezone.utc)
+                        except (CollectionTransportError, ValueError, UnicodeError):
+                            counts["review_required_count"] += 1
+                            continue
+                        try:
+                            outcome = metadata.process_followup_lead(
+                                lead=lead, approval_id=UUID(approval["id"]), facts=None,
+                                page=page.content, fetched_at=fetched_at,
+                                permission_document=permission.content,
+                                permission_checked_at=checked_at,
+                                request_id=uuid5(NAMESPACE_URL,
+                                                 f"metadata:{approval['id']}:{lead.url}"),
+                                decision_id=uuid5(NAMESPACE_URL,
+                                                  f"metadata:{query_id}:{approval['id']}:{lead.url}"),
+                                now=datetime.now(timezone.utc))
+                        except ValueError:
+                            counts["review_required_count"] += 1
+                            continue
+                        if outcome.stored_candidate_id is None:
+                            counts["review_required_count"] += 1
+                        else:
+                            counts["processed_count"] += 1
+                            if outcome.outcome.gate.status.value == "PUBLISH_READY":
+                                counts["publish_ready_count"] += 1
+        return counts
 
     def collection_schedule_policy(self) -> CollectionSchedulePolicy:
         return CollectionSchedulePolicy(
@@ -487,4 +632,5 @@ class AgentRuntime:
             },
             lease=SupabaseAutomationLease(client), worker_id=worker_id,
             lease_seconds=self.settings.automation_lease_seconds,
+            metadata_handoff=self.process_discovery_metadata,
         )

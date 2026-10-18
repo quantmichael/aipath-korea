@@ -26,11 +26,13 @@ class AutomationSummary:
 class AutomationRuntime:
     def __init__(self, *, enabled: bool, worker_enabled: dict[str, bool],
                  workers: dict[str, Callable[[], Any]], lease: AutomationLease,
-                 worker_id: str, lease_seconds: int = 3600) -> None:
+                 worker_id: str, lease_seconds: int = 3600,
+                 metadata_handoff: Callable[[tuple[str, ...]], Any] | None = None) -> None:
         if not worker_id.strip() or not 1 <= lease_seconds <= 86400:
             raise ValueError("invalid automation policy")
         self.enabled, self.worker_enabled, self.workers = enabled, worker_enabled, workers
         self.lease, self.worker_id, self.lease_seconds = lease, worker_id, lease_seconds
+        self.metadata_handoff = metadata_handoff
 
     def status(self) -> dict[str, Any]:
         names = ("discovery", "collection", "processing", "publish")
@@ -58,13 +60,29 @@ class AutomationRuntime:
                 return AutomationSummary(run_id, started, datetime.now(timezone.utc),
                                          False, "LOCKED", results, errors)
         try:
+            discovery_query_ids: list[str] = []
             for name in ("ai_plan", "ai_execute", "discovery", "collection", "processing", "publish"):
                 if not self.worker_enabled.get(name, False):
                     continue
                 try:
                     results[name] = self.workers[name]().run_once(dry_run=dry_run)
+                    if not dry_run and name == "ai_execute":
+                        outcome = results[name]
+                        if isinstance(outcome, dict) and outcome.get("status") == "SUCCEEDED" and outcome.get("query_id"):
+                            discovery_query_ids.append(outcome["query_id"])
+                    elif not dry_run and name == "discovery":
+                        discovery_query_ids.extend(getattr(results[name], "query_ids", ()))
                 except Exception as error:
                     errors[name] = type(error).__name__
+                if (not dry_run and self.metadata_handoff is not None and
+                        (name == "discovery" or
+                         name == "ai_execute" and not self.worker_enabled.get("discovery", False)) and
+                        discovery_query_ids):
+                    try:
+                        results["metadata"] = self.metadata_handoff(
+                            tuple(dict.fromkeys(discovery_query_ids)))
+                    except Exception as error:
+                        errors["metadata"] = type(error).__name__
             summary = AutomationSummary(run_id, started, datetime.now(timezone.utc),
                                         dry_run, "PARTIAL" if errors else "COMPLETED",
                                         results, errors)
@@ -86,6 +104,7 @@ class AutomationRuntime:
                     "rejected_count": getattr(results.get("discovery"), "rejected_count", 0),
                     "collection_scheduled_count": getattr(results.get("discovery"), "collection_scheduled_count", 0),
                     "collection_success_count": getattr(results.get("collection"), "success_count", 0),
+                    "metadata": results.get("metadata", {}),
                     "errors": errors,
                 })
             return summary

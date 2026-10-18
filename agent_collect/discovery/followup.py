@@ -63,14 +63,29 @@ class ReviewedOfficialRoot:
     origin: str
     reviewed_by: str
     relationship: str
+    path_prefix: str = "/"
 
     def __post_init__(self) -> None:
         scheme, host, port, _ = validate_target_url(self.origin)
         parts = urlsplit(self.origin)
         if (scheme != "https" or port != 443 or parts.path or parts.query or parts.fragment
                 or not self.reviewed_by.strip() or not self.relationship.strip()
-                or self.origin != f"https://{host}"):
+                or self.origin != f"https://{host}"
+                or not self.path_prefix.startswith("/") or
+                (self.path_prefix != "/" and not self.path_prefix.endswith("/")) or
+                ".." in self.path_prefix or "%" in self.path_prefix or
+                "//" in self.path_prefix):
             raise ValueError("an exact reviewed HTTPS official origin is required")
+
+    def covers(self, url: str) -> bool:
+        parts = urlsplit(url)
+        return (parts.scheme == "https" and
+                f"https://{parts.hostname}" == self.origin and
+                not re.search(r"%(?:2e|2f|5c)", parts.path, re.I) and
+                all(segment not in {".", ".."} for segment in parts.path.split("/")) and
+                (self.path_prefix == "/" or
+                 parts.path == self.path_prefix.rstrip("/") or
+                 parts.path.startswith(self.path_prefix)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,7 +201,7 @@ class OfficialFollowupExplorer:
         for _ in range(4):
             scheme, host, port, _ = validate_target_url(current)
             parts = urlsplit(current)
-            if (scheme != "https" or port != 443 or f"https://{host}" != reviewed.origin
+            if (scheme != "https" or port != 443 or not reviewed.covers(current)
                     or _RESTRICTED.search(unquote(parts.path))):
                 raise CollectionTransportError("outside_reviewed_origin", "unreviewed or restricted target")
             if current in redirects:
@@ -276,7 +291,7 @@ class OfficialFollowupExplorer:
                     target = canonicalize_url(_request_url(link.href))
                     scheme, host, port, _ = validate_target_url(target)
                     if (scheme != "https" or port != 443 or
-                            f"https://{host}" != reviewed.origin or
+                            not reviewed.covers(target) or
                             _RESTRICTED.search(unquote(urlsplit(target).path)) or target in seen):
                         continue
                 except (CollectionTransportError, ValueError, UnicodeError):

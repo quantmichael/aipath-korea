@@ -1,6 +1,9 @@
 """Offline PHASE 12B tests; no external provider or production DB calls."""
 
 import unittest
+import io
+import json
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -8,7 +11,8 @@ from zoneinfo import ZoneInfo
 
 from agent_collect.config.settings import load_settings
 from agent_collect.discovery.goal import (
-    GoalDrivenDiscoveryPlanner, OpenAIGoalPlanner, PlanningContext, validate_plan,
+    GoalDrivenDiscoveryPlanner, OpenAIGoalPlanner, PlanValidationError,
+    PlanningContext, validate_plan,
 )
 from agent_collect.discovery.goal_supabase import GoalExecutionWorker, GoalPlanningWorker
 from agent_collect.discovery.models import DiscoveryQuery, QueryStatus, EvaluationDecision
@@ -144,6 +148,22 @@ class GoalDiscoveryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_plan(bad, planning_date="2026-10-12")
 
+    def test_validation_errors_identify_rejected_condition(self):
+        cases = (
+            (proposal("2026-10-13"), "INVALID_PLANNING_DATE", "planning_date", None),
+            ({"planning_date": "2026-10-12"}, "INVALID_PLAN_FIELDS", "plan_fields", None),
+            ({"planning_date": "2026-10-12", "queries": []}, "INVALID_QUERY_COUNT", "query_count", None),
+            ({**proposal(), "queries": [{**proposal()["queries"][0], "language": "xx"}]},
+             "INVALID_LANGUAGE", "language", 0),
+            ({**proposal(), "queries": [{**proposal()["queries"][0], "priority": 0}]},
+             "INVALID_PRIORITY", "priority", 0),
+        )
+        for payload, code, stage, index in cases:
+            with self.subTest(code=code), self.assertRaises(PlanValidationError) as raised:
+                validate_plan(payload, planning_date="2026-10-12")
+            self.assertEqual((raised.exception.code, raised.exception.stage,
+                              raised.exception.query_index), (code, stage, index))
+
     def test_data_minimization_and_feedback(self):
         query = DiscoveryQuery(uuid4(), "AI expo Korea", "tavily", NOW,
                                vertical_hint=Vertical.EXHIBITION, status=QueryStatus.SUCCEEDED,
@@ -227,6 +247,43 @@ class GoalDiscoveryTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             worker.run_once()
         self.assertEqual(budget.calls[-1], ("finish", "UNKNOWN"))
+
+    def test_invalid_plan_logs_only_structured_diagnostics(self):
+        class Context:
+            def build(self):
+                return context()
+
+        cases = (
+            ({"planning_date": "2026-10-12", "queries": [{
+                "query": "private secret phrase AI event", "category": "BAD-CATEGORY",
+                "language": "en", "priority": 1, "reason": "Explore upcoming AI events"}]},
+             "category", "INVALID_CATEGORY", False, {"supported": 0, "novel": 0, "invalid": 1, "missing": 0}),
+            ({"planning_date": "2026-10-12", "queries": [{
+                "query": "private secret phrase AI event", "category": "competition",
+                "language": "en", "priority": 1}]},
+             "query_fields", "INVALID_QUERY_FIELDS", True,
+             {"supported": 1, "novel": 0, "invalid": 0, "missing": 0}),
+        )
+        for payload, stage, code, missing, categories in cases:
+            with self.subTest(stage=stage):
+                plans = FakePlans()
+                worker = GoalPlanningWorker(
+                    context=Context(), plans=plans, budget=FakeBudget(),
+                    planner=GoalDrivenDiscoveryPlanner(FakeProvider(payload)), enabled=True)
+                output = io.StringIO()
+                with redirect_stdout(output), self.assertRaises(ValueError):
+                    worker.run_once()
+                record = json.loads(output.getvalue())
+                self.assertEqual(record["event"], "ai_plan_validation_failed")
+                self.assertEqual(record["stage"], stage)
+                self.assertEqual(record["error_code"], code)
+                self.assertEqual(record["query_index"], 0)
+                self.assertEqual(record["query_count"], 1)
+                self.assertEqual(record["missing_required_fields"], missing)
+                self.assertEqual(record["category_validation"], categories)
+                self.assertEqual(plans.calls[-1], ("finish", [], "INVALID_PLAN"))
+                self.assertNotIn("private secret phrase", output.getvalue())
+                self.assertNotIn("BAD-CATEGORY", output.getvalue())
 
     def test_execution_off_never_claims_or_calls_runner(self):
         plans = FakePlans()

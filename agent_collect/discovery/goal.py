@@ -243,6 +243,16 @@ class GoalPlannerProvider(Protocol):
     def generate(self, context: dict[str, Any]) -> dict[str, Any]: ...
 
 
+class PlanValidationError(ValueError):
+    """A fixed diagnostic code; untrusted proposal text is never part of the error."""
+
+    def __init__(self, code: str, stage: str, query_index: int | None = None) -> None:
+        super().__init__(code)
+        self.code = code
+        self.stage = stage
+        self.query_index = query_index
+
+
 def planner_json_schema() -> dict[str, Any]:
     return {"type": "object", "additionalProperties": False,
             "properties": {
@@ -296,35 +306,39 @@ class OpenAIGoalPlanner:
 
 
 def validate_plan(payload: dict[str, Any], *, planning_date: str) -> tuple[GoalQuery, ...]:
-    if set(payload) != {"planning_date", "queries"} or payload["planning_date"] != planning_date:
-        raise ValueError("invalid planning date or fields")
+    if set(payload) != {"planning_date", "queries"}:
+        raise PlanValidationError("INVALID_PLAN_FIELDS", "plan_fields")
+    if payload["planning_date"] != planning_date:
+        raise PlanValidationError("INVALID_PLANNING_DATE", "planning_date")
     rows = payload["queries"]
     if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_QUERIES:
-        raise ValueError("invalid query count")
+        raise PlanValidationError("INVALID_QUERY_COUNT", "query_count")
     seen: set[str] = set()
     queries: list[GoalQuery] = []
-    for row in rows:
+    for index, row in enumerate(rows):
         if not isinstance(row, dict) or set(row) != {"query", "category", "language", "priority", "reason"}:
-            raise ValueError("invalid query structure")
+            raise PlanValidationError("INVALID_QUERY_FIELDS", "query_fields", index)
         query, category, language, priority, reason = (row[k] for k in
             ("query", "category", "language", "priority", "reason"))
         if (not isinstance(query, str) or not 8 <= len(query) <= 120 or
             any(ord(char) < 32 for char in query) or _UNSAFE_QUERY.search(query) or
             _DOMAIN.search(query) or _INSTRUCTION.search(query)):
-            raise ValueError("unsafe query")
-        if language not in ALLOWED_LANGUAGES or type(priority) is not int or not 1 <= priority <= 5:
-            raise ValueError("invalid language or priority")
+            raise PlanValidationError("UNSAFE_QUERY", "query_text", index)
+        if language not in ALLOWED_LANGUAGES:
+            raise PlanValidationError("INVALID_LANGUAGE", "language", index)
+        if type(priority) is not int or not 1 <= priority <= 5:
+            raise PlanValidationError("INVALID_PRIORITY", "priority", index)
         if not isinstance(reason, str) or not 5 <= len(reason) <= 200 or _INSTRUCTION.search(reason):
-            raise ValueError("invalid reason")
+            raise PlanValidationError("INVALID_REASON", "reason", index)
         if not isinstance(category, str) or not 2 <= len(category) <= 32 or not re.fullmatch(r"[a-z_]+", category):
-            raise ValueError("invalid category")
+            raise PlanValidationError("INVALID_CATEGORY", "category", index)
         try:
             vertical, new_category = Vertical(category), None
         except ValueError:
             vertical, new_category = Vertical.UNKNOWN, category
         key = normalize_query(query)
         if key in seen:
-            raise ValueError("duplicate query")
+            raise PlanValidationError("DUPLICATE_QUERY", "query_uniqueness", index)
         seen.add(key)
         queries.append(GoalQuery(query.strip(), vertical, language, priority, reason.strip(), new_category))
     return tuple(sorted(queries, key=lambda item: item.priority))

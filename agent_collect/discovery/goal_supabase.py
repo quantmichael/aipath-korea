@@ -10,7 +10,9 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from agent_collect.budget.reservations import BudgetAlreadyReserved, BudgetReservations
-from agent_collect.discovery.goal import GoalDrivenDiscoveryPlanner, PlanningContext
+from agent_collect.discovery.goal import (
+    MAX_QUERIES, GoalDrivenDiscoveryPlanner, PlanValidationError, PlanningContext,
+)
 from agent_collect.discovery.models import DiscoveryQuery, QueryStatus
 from agent_collect.discovery.runner import DiscoveryRunner
 from agent_collect.discovery.scheduling_supabase import SupabaseDiscoverySchedules
@@ -153,6 +155,39 @@ class GoalPlanningWorker:
         self.context, self.plans, self.budget, self.planner = context, plans, budget, planner
         self.enabled = enabled
 
+    @staticmethod
+    def _validation_diagnostics(payload: Any, error: Exception, plan_id: UUID) -> dict[str, Any]:
+        """Bounded, fixed-vocabulary diagnostics; never log proposal text."""
+        required = {"query", "category", "language", "priority", "reason"}
+        rows = payload.get("queries") if isinstance(payload, dict) else None
+        inspected = rows[:MAX_QUERIES] if isinstance(rows, list) else []
+        categories = {"supported": 0, "novel": 0, "invalid": 0, "missing": 0}
+        for row in inspected:
+            if not isinstance(row, dict) or "category" not in row:
+                categories["missing"] += 1
+                continue
+            category = row["category"]
+            if not isinstance(category, str) or not 2 <= len(category) <= 32 or not re.fullmatch(r"[a-z_]+", category):
+                categories["invalid"] += 1
+            elif category in {item.value for item in Vertical}:
+                categories["supported"] += 1
+            else:
+                categories["novel"] += 1
+        missing = (not isinstance(payload, dict) or
+                   not {"planning_date", "queries"} <= payload.keys() or
+                   any(not isinstance(row, dict) or not required <= row.keys()
+                       for row in (rows if isinstance(rows, list) else [])))
+        return {
+            "event": "ai_plan_validation_failed", "plan_id": str(plan_id),
+            "stage": error.stage if isinstance(error, PlanValidationError) else "planner_validation",
+            "error_code": error.code if isinstance(error, PlanValidationError) else "VALUE_ERROR",
+            "query_index": error.query_index if isinstance(error, PlanValidationError) else None,
+            "missing_required_fields": missing,
+            "query_count": len(rows) if isinstance(rows, list) else None,
+            "category_validation": categories,
+            "category_rows_inspected": len(inspected),
+        }
+
     def run_once(self, *, dry_run: bool = False) -> dict[str, Any]:
         if not self.enabled or dry_run:
             return {"status": "DISABLED" if not self.enabled else "DRY_RUN", "planned_query_count": 0}
@@ -184,6 +219,11 @@ class GoalPlanningWorker:
         self.budget.finish(reservation_id, status="SUCCEEDED")
         try:
             plan = self.planner.plan(context, payload)
+        except ValueError as error:
+            print(json.dumps(self._validation_diagnostics(payload, error, plan_id),
+                             separators=(",", ":")), flush=True)
+            self.plans.finish(plan_id, queries=[], error_code="INVALID_PLAN")
+            raise
         except Exception:
             self.plans.finish(plan_id, queries=[], error_code="INVALID_PLAN")
             raise

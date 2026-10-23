@@ -63,7 +63,11 @@ class SupabasePublishJobs:
                         "published_count": summary.published_count,
                         "duplicate_count": summary.duplicate_count,
                         "review_count": summary.review_count,
-                        "failed_count": summary.failed_count},
+                        "failed_count": summary.failed_count,
+                        "metadata_due_count": summary.metadata_due_count,
+                        "metadata_attempted_count": summary.metadata_attempted_count,
+                        "metadata": [row for row in summary.previews
+                                     if row.get("kind") == "metadata"]},
         }).execute()
 
 

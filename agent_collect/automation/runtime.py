@@ -66,6 +66,8 @@ class AutomationRuntime:
                     continue
                 try:
                     results[name] = self.workers[name]().run_once(dry_run=dry_run)
+                    if name == "publish" and getattr(results[name], "failed_count", 0):
+                        errors[name] = "PUBLISH_INCOMPLETE"
                     if not dry_run and name == "ai_execute":
                         outcome = results[name]
                         if isinstance(outcome, dict) and outcome.get("status") == "SUCCEEDED" and outcome.get("query_id"):

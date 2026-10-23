@@ -8,7 +8,7 @@ import hashlib
 import re
 from datetime import datetime, timedelta
 
-from agent_collect.discovery.evidence import _replay_claim
+from agent_collect.discovery.evidence import _CLOCK_IN_QUOTE, _replay_claim
 from agent_collect.extraction.preprocess import preprocess_html
 from agent_collect.extraction.validation import _dates_in_text, parse_explicit_datetime
 from agent_collect.metadata.evidence import (
@@ -45,7 +45,10 @@ def _date_value(text: str) -> str | None:
         if len(exact) != 1 or parse_explicit_datetime(exact[0].group()) is None:
             return None
         remainder = text[:exact[0].start()] + text[exact[0].end():]
-        return exact[0].group() if not _dates_in_text(remainder) else None
+        return (exact[0].group() if not _dates_in_text(remainder) and
+                not _CLOCK_IN_QUOTE.search(remainder) else None)
+    if _CLOCK_IN_QUOTE.search(text):
+        return None
     dates = _dates_in_text(text)
     return next(iter(dates)) if len(dates) == 1 else None
 

@@ -18,7 +18,7 @@ from agent_collect.collectors.security import CollectionTransportError
 from agent_collect.config.settings import AgentSettings, load_settings
 from agent_collect.discovery.evaluation import RuleBasedEvaluator
 from agent_collect.discovery.auto_approval import (
-    AutoApprovalAssessor, AutoApprovalExecutor, load_approval_scopes,
+    ApprovalScope, AutoApprovalAssessor, AutoApprovalExecutor, load_approval_scopes,
 )
 from agent_collect.discovery.budget import SearchBudgetGuard, SearchBudgetPolicy
 from agent_collect.discovery.providers import SearchProvider, SearchRequestPolicy
@@ -45,6 +45,7 @@ from agent_collect.extraction.providers import ExtractionProvider
 from agent_collect.extraction.providers import OpenAIExtractionProvider
 from agent_collect.extraction.runner import ExtractionRunner
 from agent_collect.normalization.runner import NormalizationRunner
+from agent_collect.metadata.evidence import usage_references_replayed
 from agent_collect.metadata.supabase import SupabaseMetadataEvidence
 from agent_collect.quality_gate.runner import QualityGateRunner
 from agent_collect.registry.service import SourceRegistryService, canonicalize_url
@@ -109,15 +110,22 @@ class AgentRuntime:
     runs: SupabaseCollectionRunRepository
     documents: SupabaseRawDocumentRepository
     settings: AgentSettings
+    investigation_scopes: tuple[ApprovalScope, ...] = ()
 
     @classmethod
     def connect(cls, environ: Mapping[str, str] | None = None) -> "AgentRuntime":
         client = create_agent_client(environ)
+        env = os.environ if environ is None else environ
+        raw_scopes = env.get("AGENT_DISCOVERY_INVESTIGATION_SCOPES_JSON")
+        scopes = load_approval_scopes(raw_scopes) if raw_scopes else ()
+        if len(scopes) > 5:
+            raise ValueError("at most five investigation scopes are allowed")
         return cls(
             sources=SupabaseSourceRepository(client),
             runs=SupabaseCollectionRunRepository(client),
             documents=SupabaseRawDocumentRepository(client),
             settings=load_settings(environ=environ),
+            investigation_scopes=scopes,
         )
 
     def collection_runner(self, raw_dir: Path, *, environ: Mapping[str, str] | None = None) -> CollectionRunner:
@@ -163,6 +171,40 @@ class AgentRuntime:
             raise RuntimeError("Metadata evidence requires an Agent Supabase client")
         return SupabaseMetadataEvidence(client)
 
+    def investigate_discovery_results(self, query_ids: tuple[str, ...]) -> dict[str, int]:
+        """Bounded research before Source approval; no Candidate or approval writes."""
+        counts = {"investigation_count": 0, "investigation_lead_count": 0,
+                  "investigation_blocked_count": 0}
+        client = getattr(self.sources, "client", None)
+        repository = SupabaseDiscoveryRepository(client)
+        explorer = OfficialFollowupExplorer(user_agent=self.settings.user_agent)
+        for query_id in tuple(dict.fromkeys(query_ids))[:5]:
+            query = repository.get_query(UUID(query_id))
+            if query is None or query.status is not QueryStatus.SUCCEEDED:
+                continue
+            response = (client.table("agent_search_results").select("id", count="exact")
+                        .eq("query_id", query_id).limit(21).execute())
+            rows = response.data or []
+            if response.count is None or response.count != len(rows) or len(rows) > 20:
+                raise RuntimeError("investigation result scan incomplete")
+            for row in rows:
+                if counts["investigation_count"] >= 5:
+                    return counts
+                result = repository.get_result(UUID(row["id"]))
+                if result is None or result.query_id != query.id:
+                    continue
+                scopes = [scope for scope in self.investigation_scopes
+                          if scope.covers(result.original_url)]
+                if len(scopes) != 1:
+                    counts["investigation_blocked_count"] += 1
+                    continue
+                counts["investigation_count"] += 1
+                outcome = explorer.investigate(result, scope=scopes[0],
+                                               now=datetime.now(timezone.utc))
+                counts["investigation_lead_count"] += len(outcome.leads)
+                counts["investigation_blocked_count"] += bool(outcome.blocked)
+        return counts
+
     def process_discovery_metadata(self, query_ids: tuple[str, ...]) -> dict[str, int]:
         """Handoff only newly searched, individually approved official notices.
 
@@ -177,6 +219,13 @@ class AgentRuntime:
                   "review_required_count": 0, "publish_ready_count": 0}
         if not query_ids:
             return counts
+        if self.investigation_scopes:
+            try:
+                counts.update(self.investigate_discovery_results(query_ids))
+            except Exception:
+                # Optional research must never interrupt the approved Metadata path.
+                # Do not log exception text from HTTP or DB providers.
+                counts["investigation_error_count"] = 1
         metadata = self.metadata_evidence()
         response = (client.table("agent_metadata_source_approvals")
                     .select("*", count="exact").eq("cohort", "operational")
@@ -585,7 +634,50 @@ class AgentRuntime:
             publish_enabled=self.settings.publish_enabled,
         )
 
-    def publish_worker(self, *, worker_id: str) -> PublishWorker:
+    def metadata_publication_inputs(self, candidate_id: UUID) -> dict[str, Any]:
+        """Fetch transient evidence only for a currently approved ACTIVE Source."""
+        empty = {"page": None, "page_url": None, "fetched_at": None,
+                 "permission_document": None, "permission_checked_at": None}
+        if not (self.settings.publish_enabled and self.settings.publish_worker_enabled):
+            raise RuntimeError("Metadata publishing is disabled")
+        source, policy = self.metadata_evidence().publication_context(candidate_id)
+        now = datetime.now(timezone.utc)
+        if (source is None or source.provenance.get("synthetic_only") is True or
+                not source_is_collectible(source) or policy is None or
+                policy.approved_principal_id is None or policy.approval_event_id is None or
+                policy.usage_rights is None or not policy.usage_rights.metadata_permitted() or
+                not policy.permits(source, policy.official_url, now=now)[0]):
+            return empty
+        explorer = OfficialFollowupExplorer(user_agent=self.settings.user_agent)
+        permission_root = ReviewedOfficialRoot(
+            policy.scope_origin, policy.reviewer, policy.organizer_relationship)
+        reviewed = ReviewedOfficialRoot(
+            policy.scope_origin, policy.reviewer, policy.organizer_relationship,
+            policy.path_prefix)
+        try:
+            permission = explorer._fetch(
+                policy.permission_url, permission_root,
+                request_policy=lambda target: target == policy.permission_url)
+            checked_at = datetime.now(timezone.utc)
+            if (permission.final_url != policy.permission_url or
+                    hashlib.sha256(permission.content).hexdigest() != policy.permission_digest or
+                    not usage_references_replayed(policy, permission.content)):
+                return empty
+            page = explorer._fetch(
+                policy.official_url, reviewed,
+                request_policy=lambda target: target == policy.official_url)
+            if page.final_url != policy.official_url:
+                return empty
+            return {"page": page.content, "page_url": page.final_url,
+                    "fetched_at": datetime.now(timezone.utc),
+                    "permission_document": permission.content,
+                    "permission_checked_at": checked_at}
+        except (CollectionTransportError, ValueError, UnicodeError, OSError):
+            # Existing assessment records a hold; no page is invented or persisted.
+            return empty
+
+    def publish_worker(self, *, worker_id: str,
+                       automated_metadata: bool = False) -> PublishWorker:
         client = getattr(self.sources, "client", None)
         if client is None:
             raise RuntimeError("publish worker requires Agent Supabase client")
@@ -597,6 +689,7 @@ class AgentRuntime:
             metadata=self.metadata_evidence(),
             metadata_publish_enabled=(self.settings.publish_enabled and
                                       self.settings.publish_worker_enabled),
+            metadata_inputs=self.metadata_publication_inputs if automated_metadata else None,
         )
 
     def automation_runtime(self, raw_dir: Path, *, worker_id: str) -> AutomationRuntime:
@@ -628,7 +721,8 @@ class AgentRuntime:
                 "discovery": lambda: self.discovery_worker(worker_id=worker_id),
                 "collection": lambda: self.collection_worker(raw_dir, worker_id=worker_id),
                 "processing": lambda: self.processing_worker(raw_dir, worker_id=worker_id),
-                "publish": lambda: self.publish_worker(worker_id=worker_id),
+                "publish": lambda: self.publish_worker(worker_id=worker_id,
+                                                       automated_metadata=True),
             },
             lease=SupabaseAutomationLease(client), worker_id=worker_id,
             lease_seconds=self.settings.automation_lease_seconds,

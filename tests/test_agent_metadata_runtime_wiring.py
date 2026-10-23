@@ -161,6 +161,17 @@ def test_approved_lead_reaches_metadata_from_agent_automation_runtime(monkeypatc
     assert unapproved_url not in fetches
     assert writes[0]["facts"]["official_url"] == URL
 
+    # A failed optional pre-approval investigation cannot suppress approved work.
+    agent.investigation_scopes = (object(),)
+    def failed_research(self, query_ids):
+        raise RuntimeError("untrusted remote error text")
+    monkeypatch.setattr(AgentRuntime, "investigate_discovery_results", failed_research)
+    recovered = runtime.run_once()
+    assert recovered.results["metadata"]["investigation_error_count"] == 1
+    assert recovered.results["metadata"]["processed_count"] == 1
+    assert "untrusted remote" not in repr(recovered)
+    agent.investigation_scopes = ()
+
     fetches.clear()
     dry = runtime.run_once(dry_run=True)
     assert "metadata" not in dry.results

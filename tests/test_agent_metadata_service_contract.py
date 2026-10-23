@@ -150,7 +150,7 @@ def test_metadata_canary_explicit_id_dry_run_never_scans_queue_or_writes():
     metadata, adapter, jobs = MagicMock(), MagicMock(), MagicMock()
     adapter.publish_enabled = False
     metadata.assess.return_value = MagicMock(candidate_id=candidate_id)
-    metadata.publication_context.return_value = (MagicMock(), MagicMock())
+    metadata.publication_context.return_value = (MagicMock(), fixture()[1])
     adapter.dry_run_metadata.return_value = MagicMock(
         eligible=True, record={"external_id": f"runtime_agent_metadata:{candidate_id}"},
         evidence={"evidence_ref": f"agent-metadata:{candidate_id}"})
@@ -175,9 +175,9 @@ def test_metadata_canary_lost_response_requires_completion_readback():
                "disposition": "PUBLISHED"}]
     adapter.tables.publish_metadata_atomic.side_effect = TimeoutError("lost response")
     adapter.tables.get_opportunity.return_value = {
-        "external_id": f"runtime_agent_metadata:{candidate_id}"}
+        "id": str(service_id), "external_id": f"runtime_agent_metadata:{candidate_id}"}
     metadata.assess_and_record.return_value = MagicMock(candidate_id=candidate_id)
-    metadata.publication_context.return_value = (MagicMock(), MagicMock())
+    metadata.publication_context.return_value = (MagicMock(), fixture()[1])
     adapter.dry_run_metadata.return_value = MagicMock(eligible=True,
         record={"external_id": f"runtime_agent_metadata:{candidate_id}"},
         evidence={"evidence_ref": f"agent-metadata:{candidate_id}"})

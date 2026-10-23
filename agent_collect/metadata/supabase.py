@@ -16,7 +16,7 @@ from agent_collect.discovery.quality import PageType
 from agent_collect.discovery.followup import FollowupLead
 from agent_collect.metadata.evidence import (
     DuplicateSnapshot, EvidenceType, MetadataAccessPolicy, MetadataCandidate,
-    MetadataEvidenceResolver, MetadataFact, MetadataOutcome,
+    MetadataEvidenceResolver, MetadataFact, MetadataOutcome, MetadataUsageRights,
 )
 from agent_collect.metadata.extraction import extract_labelled_metadata
 from agent_collect.quality_gate.models import DuplicateRecord
@@ -52,6 +52,41 @@ class SupabaseMetadataEvidence:
         self.sources = SupabaseSourceRepository(client)
         self.resolver = MetadataEvidenceResolver()
 
+    def pending_publication_ids(self, limit: int) -> tuple[UUID, ...]:
+        """Bounded complete read of ready operational rows, excluding immutable completions.
+
+        Selection is not authorization. The worker must replay current evidence
+        and the atomic RPC must check approval again under its existing locks.
+        """
+        if not 1 <= limit <= 100:
+            raise ValueError("invalid metadata publication limit")
+        response = (self.client.table("agent_metadata_candidates")
+                    .select("id", count="exact").eq("cohort", "operational")
+                    .eq("status", "PUBLISH_READY").order("discovered_at").order("id")
+                    .limit(self.max_records + 1).execute())
+        rows = response.data or []
+        if (response.count is None or response.count != len(rows) or
+                len(rows) > self.max_records):
+            raise RuntimeError("metadata publication scan incomplete")
+        ids = tuple(UUID(row["id"]) for row in rows)
+        if len(set(ids)) != len(ids):
+            raise RuntimeError("metadata publication identity mismatch")
+        if not ids:
+            return ()
+        response = (self.client.table("agent_metadata_publish_completions")
+                    .select("candidate_id,disposition", count="exact")
+                    .in_("candidate_id", [str(identity) for identity in ids])
+                    .limit(self.max_records + 1).execute())
+        completed = response.data or []
+        if (response.count is None or response.count != len(completed) or
+                len(completed) > self.max_records):
+            raise RuntimeError("metadata completion scan incomplete")
+        done = {UUID(row["candidate_id"]) for row in completed}
+        if (len(done) != len(completed) or not done.issubset(ids) or
+                any(row.get("disposition") != "PUBLISHED" for row in completed)):
+            raise RuntimeError("metadata completion identity mismatch")
+        return tuple(identity for identity in ids if identity not in done)[:limit]
+
     def _candidate(self, row: dict[str, Any]) -> MetadataCandidate:
         evidence = row.get("field_evidence") or {}
         fields = {}
@@ -75,11 +110,11 @@ class SupabaseMetadataEvidence:
         )
 
     def _policy(self, row: dict[str, Any], *, cohort: str) -> MetadataAccessPolicy | None:
-        principal = event_id = revoked_at = None
+        principal = event_id = revoked_at = usage_rights = None
         if cohort == "operational":
             try:
                 response = (self.client.table("agent_metadata_approval_events")
-                            .select("id,action,actor_uid,acted_at", count="exact")
+                            .select("id,action,actor_uid,acted_at,policy_snapshot", count="exact")
                             .eq("approval_id", row["id"])
                             .order("acted_at").limit(self.max_records + 1).execute())
                 events = response.data or []
@@ -92,6 +127,13 @@ class SupabaseMetadataEvidence:
                     return None
                 principal = UUID(approved["actor_uid"])
                 event_id = UUID(approved["id"])
+                snapshot = approved.get("policy_snapshot")
+                if (isinstance(snapshot, dict) and all(
+                        snapshot.get(key) == row.get(key) for key in (
+                            "official_url", "permission_url", "permission_digest",
+                            "scope_origin", "path_prefix"))):
+                    usage_rights = MetadataUsageRights.from_snapshot(
+                        snapshot.get("usage_rights"))
                 revocations = [event for event in events if event["action"] == "REVOKED"]
                 if revocations:
                     revoked_at = _time(revocations[-1]["acted_at"])
@@ -108,7 +150,7 @@ class SupabaseMetadataEvidence:
                 row["public_read"], row["automated_access"], row["fact_use"],
                 row["recheck_allowed"], row["raw_storage_allowed"],
                 row["redistribution_allowed"], row["scope_origin"],
-                row["path_prefix"], principal, event_id, revoked_at,
+                row["path_prefix"], principal, event_id, revoked_at, usage_rights,
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -214,7 +256,16 @@ class SupabaseMetadataEvidence:
             "p_field_evidence": field_evidence,
             "p_discovered_at": discovered_at.isoformat(),
         }).execute()
-        return UUID(result.data)
+        candidate_id = UUID(result.data)
+        stored = _one(self.client.table("agent_metadata_candidates")
+                      .select("facts,field_evidence").eq("id", str(candidate_id)))
+        if (stored is None or stored.get("facts") != facts or
+                stored.get("field_evidence") != field_evidence):
+            # Migration 015 also deduplicates by approval, URL and period.
+            # A prior Candidate with different review evidence must not be
+            # reported as if these new literals were preserved.
+            raise ValueError("existing metadata candidate differs from supplied evidence")
+        return candidate_id
 
     def process_followup_lead(self, *, lead: FollowupLead, approval_id: UUID,
                               facts: dict[str, MetadataFact] | None, page: bytes | None,

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from uuid import UUID, uuid4
 
 from agent_collect.adapters.service_db.adapter import (
@@ -10,6 +10,7 @@ from agent_collect.adapters.service_db.adapter import (
 )
 from agent_collect.adapters.service_db.contract import PublishAction
 from agent_collect.repositories.publish_ledger import PublishLedger
+from agent_collect.metadata.evidence import usage_references_replayed
 from agent_collect.metadata.supabase import SupabaseMetadataEvidence
 
 
@@ -41,6 +42,8 @@ class PublishSummary:
     review_count: int
     failed_count: int
     previews: tuple[dict[str, Any], ...]
+    metadata_due_count: int = 0
+    metadata_attempted_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -102,13 +105,31 @@ class PublishWorker:
                  adapter: SupabaseServiceDBAdapter, worker_id: str,
                  max_jobs: int = 1, lease_seconds: int = 300,
                  metadata: SupabaseMetadataEvidence | None = None,
-                 metadata_publish_enabled: bool = False) -> None:
+                 metadata_publish_enabled: bool = False,
+                 metadata_inputs: Callable[[UUID], dict[str, Any]] | None = None) -> None:
         if not worker_id.strip() or not 1 <= max_jobs <= 100 or not 1 <= lease_seconds <= 86400:
             raise ValueError("invalid publish worker policy")
         self.jobs, self.ledger, self.adapter = jobs, ledger, adapter
         self.worker_id, self.max_jobs, self.lease_seconds = worker_id, max_jobs, lease_seconds
         self.metadata = metadata
         self.metadata_publish_enabled = metadata_publish_enabled
+        self.metadata_inputs = metadata_inputs
+
+    def _confirmed_metadata_completion(self, candidate_id: UUID,
+                                       prior: dict[str, Any] | None, *,
+                                       expected_service_id: UUID | None = None) -> UUID | None:
+        """Confirm the exact Candidate and Service identities on every readback."""
+        if (prior is None or prior.get("candidate_id") != str(candidate_id) or
+                prior.get("disposition") != "PUBLISHED"):
+            return None
+        service_id = UUID(prior["opportunity_id"])
+        if expected_service_id is not None and service_id != expected_service_id:
+            return None
+        row = self.adapter.tables.get_opportunity(service_id)
+        if (row is None or row.get("id") != str(service_id) or
+                row.get("external_id") != f"runtime_agent_metadata:{candidate_id}"):
+            return None
+        return service_id
 
     def run_metadata_candidate(self, candidate_id: UUID, *, page: bytes | None,
                                page_url: str | None, fetched_at: datetime | None,
@@ -127,16 +148,17 @@ class PublishWorker:
             raise RuntimeError("Metadata publishing is disabled")
         tables = self.adapter.tables
         if not dry_run:
-            prior = tables.get_metadata_completion(candidate_id)
-            if prior is not None:
-                service_id = UUID(prior["opportunity_id"])
-                row = tables.get_opportunity(service_id)
-                if (prior.get("candidate_id") != str(candidate_id) or
-                        prior.get("disposition") != "PUBLISHED" or row is None or
-                        row.get("external_id") != f"runtime_agent_metadata:{candidate_id}"):
-                    return MetadataPublishResult(candidate_id, "UNKNOWN",
-                                                 reasons=("COMPLETION_READBACK_MISMATCH",))
+            try:
+                prior = tables.get_metadata_completion(candidate_id)
+                service_id = self._confirmed_metadata_completion(candidate_id, prior)
+            except Exception:
+                return MetadataPublishResult(candidate_id, "UNKNOWN",
+                                             reasons=("COMPLETION_READBACK_UNAVAILABLE",))
+            if service_id is not None:
                 return MetadataPublishResult(candidate_id, "ALREADY_PUBLISHED", service_id)
+            if prior is not None:
+                return MetadataPublishResult(candidate_id, "UNKNOWN",
+                                             reasons=("COMPLETION_READBACK_MISMATCH",))
         at = datetime.now(timezone.utc)
         if dry_run:
             outcome = self.metadata.assess(
@@ -149,6 +171,11 @@ class PublishWorker:
                 fetched_at=fetched_at, permission_document=permission_document,
                 permission_checked_at=permission_checked_at, now=at)
         source, approval = self.metadata.publication_context(candidate_id)
+        if (approval is None or approval.usage_rights is None or
+                not approval.usage_rights.metadata_permitted() or
+                not usage_references_replayed(approval, permission_document or b"")):
+            return MetadataPublishResult(candidate_id, "HELD",
+                                         reasons=("METADATA_USAGE_RIGHTS_UNCONFIRMED",))
         plan = self.adapter.dry_run_metadata(outcome, source=source,
                                              approval=approval,
                                              at=datetime.now(timezone.utc))
@@ -157,33 +184,34 @@ class PublishWorker:
         if dry_run:
             return MetadataPublishResult(candidate_id, "DRY_RUN")
         try:
-            service_id, _ = tables.publish_metadata_atomic(
+            service_id, disposition = tables.publish_metadata_atomic(
                 candidate_id, plan.record, plan.evidence)
         except Exception:
             # The RPC may have committed before its response was lost. A
             # missing/failed readback does not turn uncertainty into success.
             try:
                 prior = tables.get_metadata_completion(candidate_id)
-                if prior is not None:
-                    service_id = UUID(prior["opportunity_id"])
-                    row = tables.get_opportunity(service_id)
-                    if (prior.get("disposition") == "PUBLISHED" and row is not None and
-                            row.get("external_id") ==
-                            f"runtime_agent_metadata:{candidate_id}"):
-                        return MetadataPublishResult(candidate_id, "ALREADY_PUBLISHED",
-                                                     service_id)
+                service_id = self._confirmed_metadata_completion(candidate_id, prior)
+                if service_id is not None:
+                    return MetadataPublishResult(candidate_id, "ALREADY_PUBLISHED",
+                                                 service_id)
             except Exception:
                 pass
             return MetadataPublishResult(candidate_id, "UNKNOWN",
                                          reasons=("RPC_RESULT_UNCONFIRMED",))
-        prior = tables.get_metadata_completion(candidate_id)
-        row = tables.get_opportunity(service_id)
-        if (prior is None or prior.get("opportunity_id") != str(service_id) or
-                prior.get("disposition") != "PUBLISHED" or row is None or
-                row.get("external_id") != f"runtime_agent_metadata:{candidate_id}"):
+        try:
+            prior = tables.get_metadata_completion(candidate_id)
+            confirmed = self._confirmed_metadata_completion(
+                candidate_id, prior, expected_service_id=service_id)
+        except Exception:
+            return MetadataPublishResult(candidate_id, "UNKNOWN",
+                                         reasons=("COMPLETION_READBACK_UNAVAILABLE",))
+        if confirmed is None:
             return MetadataPublishResult(candidate_id, "UNKNOWN",
                                          reasons=("COMPLETION_READBACK_MISMATCH",))
-        return MetadataPublishResult(candidate_id, "PUBLISHED", service_id)
+        return MetadataPublishResult(
+            candidate_id, "ALREADY_PUBLISHED" if disposition == "already_published"
+            else "PUBLISHED", service_id)
 
     def _candidate(self, candidate_id: UUID):
         queue = self.ledger.get(candidate_id)
@@ -251,9 +279,47 @@ class PublishWorker:
                 failed += 1
                 previews.append({"candidate_id": str(job.candidate_id),
                                  "error": type(error).__name__, "recovery": "LEASE_RECHECK"})
+        metadata_due = metadata_attempted = 0
+        # Preserve Full Raw priority and share its per-run ceiling. A failure in
+        # that path must not be followed by additional Metadata publication.
+        remaining = self.max_jobs - len(due)
+        if (remaining > 0 and not failed and self.adapter.publish_enabled and
+                self.metadata_publish_enabled and self.metadata is not None and
+                self.metadata_inputs is not None):
+            try:
+                ids = self.metadata.pending_publication_ids(remaining)
+                if len(ids) > remaining or len(set(ids)) != len(ids):
+                    raise ValueError("metadata publication selection exceeds scope")
+                metadata_due = len(ids)
+                for candidate_id in ids:
+                    if dry_run:
+                        previews.append({"candidate_id": str(candidate_id),
+                                         "kind": "metadata", "eligible": False,
+                                         "reasons": ["FRESH_EVIDENCE_RECHECK_REQUIRED"]})
+                        continue
+                    metadata_attempted += 1
+                    result = self.run_metadata_candidate(
+                        candidate_id, **self.metadata_inputs(candidate_id), dry_run=False)
+                    previews.append({"candidate_id": str(candidate_id), "kind": "metadata",
+                                     "status": result.status, "reasons": list(result.reasons)})
+                    if result.status == "PUBLISHED":
+                        published += 1
+                    elif result.status == "ALREADY_PUBLISHED":
+                        duplicate += 1
+                    elif result.status == "HELD":
+                        review += 1
+                    else:
+                        # UNKNOWN is not failure-to-commit. Stop this run without
+                        # retry; a later tick rechecks the immutable completion.
+                        failed += 1
+                        break
+            except Exception as error:
+                failed += 1
+                previews.append({"kind": "metadata", "error": type(error).__name__,
+                                 "recovery": "COMPLETION_RECHECK"})
         summary = PublishSummary(self.worker_id, started, datetime.now(timezone.utc), dry_run,
-                                 len(due), claimed, published, duplicate, review, failed,
-                                 tuple(previews))
+                                 len(due) + metadata_due, claimed, published, duplicate, review,
+                                 failed, tuple(previews), metadata_due, metadata_attempted)
         if not dry_run:
             self.jobs.record_summary(summary)
         return summary

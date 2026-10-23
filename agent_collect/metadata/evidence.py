@@ -50,6 +50,68 @@ class EvidenceType(StrEnum):
     PAGE_LINK = "PAGE_LINK"
 
 
+class UsageStatus(StrEnum):
+    ALLOWED = "ALLOWED"
+    DENIED = "DENIED"
+    UNVERIFIED = "UNVERIFIED"
+
+
+_USAGE_ACTIONS = (
+    "public_read", "automated_access", "fact_extract", "fact_store",
+    "fact_display", "html_store", "html_redistribute", "attachment_collect",
+)
+_METADATA_ACTIONS = _USAGE_ACTIONS[:5]
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataUsageRights:
+    """Action-specific human review bound to one permission document."""
+
+    statuses: dict[str, UsageStatus]
+    evidence_references: dict[str, str]
+
+    @classmethod
+    def from_snapshot(cls, snapshot: object) -> "MetadataUsageRights | None":
+        if not isinstance(snapshot, dict) or set(snapshot) != set(_USAGE_ACTIONS):
+            return None
+        try:
+            statuses = {}
+            references = {}
+            for action in _USAGE_ACTIONS:
+                item = snapshot[action]
+                if not isinstance(item, dict):
+                    return None
+                statuses[action] = UsageStatus(item["status"])
+                reference = item.get("evidence_reference")
+                if statuses[action] is UsageStatus.ALLOWED:
+                    if not isinstance(reference, str) or not reference.strip():
+                        return None
+                    references[action] = reference.strip()
+            return cls(statuses, references)
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def metadata_permitted(self) -> bool:
+        return all(self.statuses.get(action) is UsageStatus.ALLOWED
+                   for action in _METADATA_ACTIONS)
+
+
+def usage_references_replayed(policy: "MetadataAccessPolicy",
+                              permission_document: bytes) -> bool:
+    if policy.usage_rights is None or not permission_document or len(
+            permission_document) > _MAX_PAGE_BYTES:
+        return False
+    try:
+        prepared = preprocess_html(permission_document,
+                                   source_url=policy.permission_url,
+                                   max_input_chars=12000)
+    except (UnsafeTargetError, ValueError, UnicodeError):
+        return False
+    available = {block.block_id for block in prepared.evidence_blocks}
+    return all(policy.usage_rights.evidence_references.get(action) in available
+               for action in _METADATA_ACTIONS)
+
+
 @dataclass(frozen=True, slots=True)
 class MetadataAccessPolicy:
     """Human-reviewed permission for facts and transient page re-check only."""
@@ -76,6 +138,7 @@ class MetadataAccessPolicy:
     approved_principal_id: UUID | None = None
     approval_event_id: UUID | None = None
     revoked_at: datetime | None = None
+    usage_rights: MetadataUsageRights | None = None
 
     def permits(self, source: Source | None, target: str, *, now: datetime
                 ) -> tuple[bool, str]:

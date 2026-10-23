@@ -4,9 +4,11 @@ This is a Discovery lead finder, not Collection or official evidence verificatio
 It never stores page bodies, registers Sources, or marks a lead publishable.
 """
 
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import TYPE_CHECKING, Callable
 from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 from zoneinfo import ZoneInfo
@@ -17,6 +19,10 @@ from agent_collect.discovery.models import SearchResult
 from agent_collect.extraction.preprocess import preprocess_html
 from agent_collect.extraction.validation import _dates_in_text, parse_explicit_datetime
 from agent_collect.registry.service import canonicalize_url
+
+
+if TYPE_CHECKING:
+    from agent_collect.discovery.auto_approval import ApprovalScope
 
 
 _LINK = re.compile(
@@ -195,14 +201,16 @@ class OfficialFollowupExplorer:
         self.user_agent = user_agent
         self._robots: dict[str, RobotFileParser | None] = {}
 
-    def _fetch(self, url: str, reviewed: ReviewedOfficialRoot):
+    def _fetch(self, url: str, reviewed: ReviewedOfficialRoot, *,
+               request_policy: Callable[[str], bool] | None = None):
         current = _request_url(url)
         redirects: set[str] = set()
         for _ in range(4):
             scheme, host, port, _ = validate_target_url(current)
             parts = urlsplit(current)
             if (scheme != "https" or port != 443 or not reviewed.covers(current)
-                    or _RESTRICTED.search(unquote(parts.path))):
+                    or _RESTRICTED.search(unquote(parts.path))
+                    or (request_policy is not None and not request_policy(current))):
                 raise CollectionTransportError("outside_reviewed_origin", "unreviewed or restricted target")
             if current in redirects:
                 raise CollectionTransportError("redirect_loop", "redirect loop")
@@ -238,8 +246,46 @@ class OfficialFollowupExplorer:
             return response
         raise CollectionTransportError("too_many_redirects", "redirect limit exceeded")
 
+    def investigate(self, result: SearchResult, *, scope: "ApprovalScope", now: datetime) -> FollowupOutcome:
+        """Read-only pre-approval research under an existing reviewed license scope.
+
+        This never approves a Source or constitutes publication evidence.
+        """
+        from agent_collect.discovery.auto_approval import ApprovalScope
+        def blocked(code):
+            return FollowupOutcome(str(result.id), (), (), (code,))
+        url = result.original_url
+        if (not isinstance(scope, ApprovalScope) or now.tzinfo is None or
+                not scope.reviewed_at <= now < scope.expires_at or not scope.covers(url) or
+                canonicalize_url(result.canonical_url or url) != canonicalize_url(url)):
+            return blocked("investigation_scope_invalid")
+        reviewed = ReviewedOfficialRoot(scope.origin, scope.reviewed_by,
+                                        "reviewed explicit license", scope.path_prefix)
+        evidence_root = ReviewedOfficialRoot(scope.origin, scope.reviewed_by,
+                                             "reviewed permission evidence")
+        def public_page(target: str) -> bool:
+            path = unquote(urlsplit(target).path).lower()
+            return not re.search(
+                r"(?:download|attachment|/files?/|\.(?:pdf|hwp|hwpx|docx?|xlsx?|pptx?|zip|jpe?g|png|gif)$)", path)
+
+        self._robots.clear()
+        try:
+            for evidence_url, digest in ((scope.officiality_evidence_url, scope.officiality_sha256),
+                                         (scope.terms_url, scope.terms_sha256)):
+                response = self._fetch(evidence_url, evidence_root, request_policy=public_page)
+                if (response.final_url != evidence_url or
+                        hashlib.sha256(response.content).hexdigest() != digest):
+                    return blocked("investigation_evidence_changed")
+            def permitted_page(target: str) -> bool:
+                return scope.covers(target) and public_page(target)
+            return self.explore(result, reviewed=reviewed, now=now, max_depth=1,
+                                max_links=2, request_policy=permitted_page)
+        except (CollectionTransportError, ValueError, UnicodeError, OSError):
+            return blocked("investigation_access_blocked")
+
     def explore(self, result: SearchResult, *, reviewed: ReviewedOfficialRoot,
-                now: datetime, max_depth: int = 2, max_links: int = 10) -> FollowupOutcome:
+                now: datetime, max_depth: int = 2, max_links: int = 10,
+                request_policy: Callable[[str], bool] | None = None) -> FollowupOutcome:
         if now.tzinfo is None or result.discovered_at.tzinfo is None:
             raise ValueError("aware times required")
         if not 1 <= max_depth <= 2 or not 1 <= max_links <= 10:
@@ -257,7 +303,7 @@ class OfficialFollowupExplorer:
         while queue:
             url, depth, parent, label = queue.pop(0)
             try:
-                response = self._fetch(url, reviewed)
+                response = self._fetch(url, reviewed, request_policy=request_policy)
             except (CollectionTransportError, ValueError, UnicodeError) as error:
                 blocked.append(getattr(error, "code", "invalid_target"))
                 continue

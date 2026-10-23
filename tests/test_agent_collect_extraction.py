@@ -184,6 +184,27 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(result.status, ExtractionStatus.NOT_CONFERENCE)
         self.assertTrue(all(field.value is None for field in result.candidate.fields.values()))
 
+    def test_extractively_grounded_summary_and_cited_page_url(self):
+        data = payload()
+        data["fields"]["summary"] = {
+            "value": "Organized by Korea AI Society.",
+            "evidence_block_ids": ["B002"], "link_ids": [], "confidence": 0.9,
+        }
+        result = self.runner(FakeExtractionProvider(data)).run(self.document.id)
+        self.assertEqual(result.candidate.fields["summary"].validation_status, "VALID")
+        self.assertEqual(result.candidate.fields["official_url"].value, URL)
+        self.assertEqual(result.candidate.fields["official_url"].link_ids, ("L000",))
+
+        other_doc = self._document(HTML + b"<p>Additional details.</p>")
+        data["fields"]["summary"]["value"] = "Korea AI Society will award cash prizes."
+        data["fields"]["official_url"]["link_ids"] = []
+        blocked = self.runner(FakeExtractionProvider(data)).run(other_doc.id)
+        self.assertEqual(blocked.candidate.fields["summary"].validation_status, "VALUE_MISMATCH")
+        self.assertIsNone(blocked.candidate.fields["summary"].value)
+        self.assertEqual(blocked.candidate.fields["official_url"].validation_status, "MISSING")
+        self.assertIsNone(blocked.candidate.fields["official_url"].value)
+
+
     def test_hallucinated_evidence_date_and_url_are_nulled(self):
         bad = payload()
         bad["fields"]["organizer"]["evidence_block_ids"] = ["B999"]

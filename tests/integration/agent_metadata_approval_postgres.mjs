@@ -96,6 +96,17 @@ try {
   const samePeriod=(await db.query('select public.agent_metadata_create_candidate($1,$2,$3,$4,$5) as id',
     [randomUUID(),approval,facts,evidence,testTime])).rows[0].id;
   assert.equal(samePeriod,candidate);
+  // Migration 015 returns the same period's existing ID even for different
+  // evidence. The SDK must read it back and fail rather than relabel old facts.
+  const changedEvidence={...evidence,title:{reference:'B999'}};
+  const reused=(await db.query('select public.agent_metadata_create_candidate($1,$2,$3,$4,$5) as id',
+    [randomUUID(),approval,{...facts,title:'Different title'},changedEvidence,testTime])).rows[0].id;
+  assert.equal(reused,candidate);
+  const preserved=(await db.query('select facts,field_evidence,status from public.agent_metadata_candidates where id=$1',
+    [candidate])).rows[0];
+  assert.deepEqual(preserved.facts,facts);
+  assert.deepEqual(preserved.field_evidence,evidence);
+  assert.equal(preserved.status,'REVIEW_REQUIRED');
   const verification={status:'VERIFIED',time_precision:'DATE_ONLY',evidence_refs:[url+'#B001']};
   const duplicate={status:'UNIQUE'},gate={status:'PUBLISH_READY'},assessId=randomUUID();
   await assert.rejects(db.query(

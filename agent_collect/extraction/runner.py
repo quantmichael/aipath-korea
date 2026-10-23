@@ -230,6 +230,7 @@ class ExtractionRunner:
             self.repository.log(event_type="EXTRACTION_FAILED", source_id=document.source_id,
                                 run_id=document.run_id, details={"raw_document_id": str(document.id),
                                                                  "code": code,
+                                                                 "provider_diagnostics": error.diagnostics if isinstance(error, ExtractionProviderError) else {},
                                                                  "model": self.provider.model})
             return ExtractionOutcome(document.id, document.source_id, document.run_id,
                                      ExtractionStatus.FAILED, None, None,

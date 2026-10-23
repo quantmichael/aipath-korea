@@ -11,7 +11,7 @@ from agent_collect.extraction.preprocess import preprocess_html
 from agent_collect.discovery.quality import PageType
 from agent_collect.metadata.evidence import (
     DuplicateSnapshot, EvidenceType, MetadataAccessPolicy, MetadataCandidate,
-    MetadataEvidenceResolver, MetadataFact, metadata_metrics,
+    MetadataEvidenceResolver, MetadataFact, MetadataUsageRights, metadata_metrics,
 )
 from agent_collect.metadata.category_policy import category_policy
 from agent_collect.quality_gate.models import DuplicateRecord, GateStatus
@@ -23,6 +23,13 @@ NOW = datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc)
 URL = "https://fixture.example.org/notices/synthetic-ai-2027"
 PERMISSION = b"Synthetic test-only metadata use and transient recheck permission"
 DIGEST = hashlib.sha256(PERMISSION).hexdigest()
+USAGE_SNAPSHOT = {
+    action: {"status": "ALLOWED" if index < 5 else "DENIED",
+             "evidence_reference": "B001" if index < 5 else ""}
+    for index, action in enumerate(("public_read", "automated_access", "fact_extract",
+                                   "fact_store", "fact_display", "html_store",
+                                   "html_redistribute", "attachment_collect"))
+}
 
 
 def fixture(*, exact=False, category="conference", event_dates=True,
@@ -76,6 +83,7 @@ def fixture(*, exact=False, category="conference", event_dates=True,
         DIGEST, "fixture organizer", "Fixture Lab", PageType.INDIVIDUAL_NOTICE,
         True, True, True, True, True,
         False, False, "https://fixture.example.org", "/",
+        usage_rights=MetadataUsageRights.from_snapshot(USAGE_SNAPSHOT),
     )
     candidate = MetadataCandidate(uuid4(), source.id, URL, facts, observed_at, "synthetic")
     duplicates = DuplicateSnapshot((), (), observed_at, True, True)

@@ -35,6 +35,9 @@ from agent_collect.schemas.status import RunStatus, VerificationStatus
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _EXACT_IN_QUOTE = re.compile(
     r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})")
+_CLOCK_IN_QUOTE = re.compile(
+    r"(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?!\d)|"
+    r"(?<!\d)\d{1,2}\s*시|\b\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?)\b", re.I)
 _NOTICE_WORDS = re.compile(
     r"notice|apply|application|register|recruit|call|공고|모집|신청|접수", re.I)
 _SOCIAL_HOSTS = ("instagram.com", "facebook.com", "youtube.com", "youtu.be",
@@ -362,6 +365,10 @@ def _replay_claim(name: str, claim: EvidenceClaim, prepared: PreparedContent,
                 return None, TimePrecision.UNKNOWN, "exact_time_not_replayed"
             return exact.isoformat(), TimePrecision.EXACT_TIME, None
         day = validated_calendar_date(value)
+        if day is not None and _CLOCK_IN_QUOTE.search(claim.quote):
+            # A date-only value cannot discard a clock from its own citation.
+            # Unknown timezone/ambiguous clocks require review, not an end-of-day fallback.
+            return None, TimePrecision.UNKNOWN, "date_only_discards_time"
         if day is None or day.isoformat() not in _dates_in_text(claim.quote):
             return None, TimePrecision.UNKNOWN, "date_not_replayed"
         return day.isoformat(), TimePrecision.DATE_ONLY, None

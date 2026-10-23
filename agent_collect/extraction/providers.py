@@ -33,10 +33,12 @@ class ExtractionProvider(Protocol):
 
 
 class ExtractionProviderError(Exception):
-    def __init__(self, code: str, *, retryable: bool = False) -> None:
+    def __init__(self, code: str, *, retryable: bool = False,
+                 diagnostics: dict[str, object] | None = None) -> None:
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+        self.diagnostics = diagnostics or {}
 
 
 class FakeExtractionProvider:
@@ -91,13 +93,27 @@ class OpenAIExtractionProvider:
             raise ExtractionProviderError("SDK_UNAVAILABLE") from None
         except Exception as error:
             name = type(error).__name__
+            known = {"APITimeoutError", "TimeoutError", "APIConnectionError",
+                     "BadRequestError", "AuthenticationError", "PermissionDeniedError",
+                     "NotFoundError", "RateLimitError", "InternalServerError",
+                     "UnprocessableEntityError"}
+            diagnostics = {"exception_type": name if name in known else "OTHER"}
+            status = getattr(error, "status_code", None)
+            if type(status) is int and 400 <= status <= 599:
+                diagnostics["http_status"] = status
+            cause = error.__cause__
+            cause_name = type(cause).__name__ if cause else "NONE"
+            diagnostics["cause_type"] = cause_name if cause_name in {
+                "NONE", "ConnectError", "ConnectTimeout", "ReadTimeout", "SSLError",
+                "SSLCertVerificationError", "gaierror", "TimeoutError", "OSError",
+            } else "OTHER"
             if name in {"APITimeoutError", "TimeoutError"}:
-                raise ExtractionProviderError("TIMEOUT", retryable=True) from None
+                raise ExtractionProviderError("TIMEOUT", retryable=True, diagnostics=diagnostics) from None
             if name == "RateLimitError":
-                raise ExtractionProviderError("RATE_LIMIT", retryable=True) from None
+                raise ExtractionProviderError("RATE_LIMIT", retryable=True, diagnostics=diagnostics) from None
             if name == "AuthenticationError":
-                raise ExtractionProviderError("AUTHENTICATION_FAILURE") from None
-            raise ExtractionProviderError("PROVIDER_ERROR", retryable=name in {"APIConnectionError", "InternalServerError"}) from None
+                raise ExtractionProviderError("AUTHENTICATION_FAILURE", diagnostics=diagnostics) from None
+            raise ExtractionProviderError("PROVIDER_ERROR", retryable=name in {"APIConnectionError", "InternalServerError"}, diagnostics=diagnostics) from None
         if getattr(response, "status", None) != "completed" or not getattr(response, "output_text", None):
             raise ExtractionProviderError("INCOMPLETE_RESPONSE")
         try:

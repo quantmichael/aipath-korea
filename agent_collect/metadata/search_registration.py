@@ -172,33 +172,22 @@ def publish_one_search_preview(preview: SearchRegistrationPreview,
         return SearchRegistrationResult("DISABLED")
     if not preview.eligible or preview.record is None or preview.evidence is None:
         return SearchRegistrationResult("HELD")
-    checked_now = now or datetime.now(timezone.utc)
-    if (checked_now.tzinfo is None or preview.prepared_at is None or
-            not preview.prepared_at <= checked_now <=
-            preview.prepared_at + timedelta(minutes=1) or
-            preview.permission_valid_until is None or
-            checked_now >= preview.permission_valid_until):
-        return SearchRegistrationResult("STALE")
-    deadline = preview.evidence.get("application_deadline")
-    try:
-        if deadline["precision"] == "EXACT_TIME":
-            cutoff = datetime.fromisoformat(preview.record["application_deadline_at"])
-            if cutoff.tzinfo is None or checked_now >= cutoff:
-                return SearchRegistrationResult("STALE")
-        elif deadline["precision"] == "DATE_ONLY":
-            cutoff_day = date.fromisoformat(deadline["source_date"])
-            if checked_now.astimezone(ZoneInfo("Asia/Seoul")).date() >= cutoff_day:
-                return SearchRegistrationResult("STALE")
-        else:
-            return SearchRegistrationResult("UNKNOWN")
-    except (KeyError, TypeError, ValueError):
-        return SearchRegistrationResult("UNKNOWN")
+    checked_now = now if now is not None else datetime.now(timezone.utc)
+    status = _registration_window_status(preview, checked_now)
+    if status is not None:
+        return SearchRegistrationResult(status)
     try:
         current_rows = tables.list_opportunities()
         if _matches_existing(preview.record, current_rows):
             return SearchRegistrationResult("DUPLICATE")
     except Exception:
         return SearchRegistrationResult("UNKNOWN")
+    # The final Service scan may span the recruitment cutoff or permission
+    # expiry. Runtime calls with the live clock, so check once more before RPC.
+    if now is None:
+        status = _registration_window_status(preview, datetime.now(timezone.utc))
+        if status is not None:
+            return SearchRegistrationResult(status)
     try:
         row, disposition = tables.register_opportunity(preview.record, preview.evidence)
     except Exception:
@@ -214,6 +203,31 @@ def publish_one_search_preview(preview: SearchRegistrationPreview,
         return SearchRegistrationResult("PUBLISHED", UUID(str(row["id"])))
     except (KeyError, ValueError, TypeError):
         return SearchRegistrationResult("UNKNOWN")
+
+
+def _registration_window_status(preview: SearchRegistrationPreview,
+                                checked_now: datetime) -> str | None:
+    if (checked_now.tzinfo is None or preview.prepared_at is None or
+            not preview.prepared_at <= checked_now <=
+            preview.prepared_at + timedelta(minutes=1) or
+            preview.permission_valid_until is None or
+            checked_now >= preview.permission_valid_until):
+        return "STALE"
+    deadline = preview.evidence.get("application_deadline")
+    try:
+        if deadline["precision"] == "EXACT_TIME":
+            cutoff = datetime.fromisoformat(preview.record["application_deadline_at"])
+            if cutoff.tzinfo is None or checked_now >= cutoff:
+                return "STALE"
+        elif deadline["precision"] == "DATE_ONLY":
+            cutoff_day = date.fromisoformat(deadline["source_date"])
+            if checked_now.astimezone(ZoneInfo("Asia/Seoul")).date() >= cutoff_day:
+                return "STALE"
+        else:
+            return "UNKNOWN"
+    except (KeyError, TypeError, ValueError):
+        return "UNKNOWN"
+    return None
 
 
 def _time(fact: PublicNoticeFact) -> tuple[str, dict[str, str]] | None:

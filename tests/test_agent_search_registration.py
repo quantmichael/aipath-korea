@@ -395,6 +395,41 @@ def test_atomic_registration_rechecks_exact_deadline_before_rpc():
         now=NOW+timedelta(seconds=31)).status == "STALE"
 
 
+def test_atomic_registration_holds_if_deadline_passes_during_service_scan(monkeypatch):
+    from agent_collect.metadata import search_registration as registration_module
+
+    values = _inputs()
+    deadline = NOW + timedelta(seconds=30)
+    values["facts"]["application_start"] = _fact(
+        (NOW-timedelta(hours=1)).isoformat(), "B003")
+    values["facts"]["application_deadline"] = _fact(deadline.isoformat(), "B004")
+    values["official_page"] = replace(
+        values["official_page"], recruitment_start_on=None,
+        recruitment_deadline_on=None,
+        recruitment_start_at=NOW-timedelta(hours=1),
+        recruitment_deadline_at=deadline)
+    preview = preview_search_registration(**values)
+    assert preview.eligible
+    clock = {"now": NOW + timedelta(seconds=20)}
+
+    class FakeDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock["now"]
+
+    class Tables:
+        def list_opportunities(self):
+            clock["now"] = NOW + timedelta(seconds=31)
+            return []
+
+        def register_opportunity(self, payload, evidence):
+            raise AssertionError("expired notice must stop before Service RPC")
+
+    monkeypatch.setattr(registration_module, "datetime", FakeDatetime)
+    assert publish_one_search_preview(
+        preview, Tables(), publish_enabled=True).status == "STALE"
+
+
 def test_atomic_registration_rechecks_kst_date_only_boundary():
     values = _inputs()
     values["now"] = datetime(2027, 4, 12, 14, 59, 30, tzinfo=timezone.utc)

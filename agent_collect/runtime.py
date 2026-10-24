@@ -322,8 +322,7 @@ class AgentRuntime:
                         continue
                     counts["eligible_count"] += 1
                     publication = publish_one_search_preview(
-                        preview, tables, publish_enabled=self.settings.publish_enabled,
-                        now=checked_at)
+                        preview, tables, publish_enabled=self.settings.publish_enabled)
                     if publication.status == "PUBLISHED":
                         counts["published_count"] += 1
                     elif publication.status != "DISABLED":

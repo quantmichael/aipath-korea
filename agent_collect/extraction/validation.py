@@ -3,7 +3,7 @@
 import re
 import unicodedata
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 from agent_collect.collectors.security import UnsafeTargetError, validate_target_url
 from agent_collect.extraction.preprocess import PreparedContent
@@ -31,7 +31,20 @@ _EXPLICIT_DATETIME = re.compile(
     r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})"
 )
 _ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_DOTTED_DATE = re.compile(
+    r"(?<![\d.])\d{4}\.\s*\d{1,2}\.\s*\d{1,2}(?:\.(?!\d))?(?!\d|\.\d)"
+)
+_KOREAN_WEEKDAYS = "월화수목금토일"
 _KOREAN_DATE = re.compile(r"\b\d{4}년\s*\d{1,2}월\s*\d{1,2}일\b")
+_KOREAN_ZONED_CLOCK = re.compile(
+    r"(?<!\d)(?P<year>\d{4})(?:년\s*(?P<km>\d{1,2})월\s*(?P<kd>\d{1,2})일|"
+    r"[.\-/]\s*(?P<nm>\d{1,2})\s*[.\-/]\s*(?P<nd>\d{1,2})\.?)"
+    r"\s*(?:\((?P<weekday>[월화수목금토일])\))?\s*"
+    r"(?P<hour>\d{1,2}):(?P<minute>\d{2})(?::(?P<second>\d{2}))?"
+    r"\s*(?P<zone>KST|UTC\+09:00|\+09:00)(?![A-Za-z0-9:+-])",
+    re.I,
+)
+_OTHER_CLOCK = re.compile(r"(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?!\d)|(?<!\d)\d{1,2}\s*시")
 
 
 def _normal(text: str) -> str:
@@ -41,6 +54,13 @@ def _normal(text: str) -> str:
 
 def parse_unambiguous_date(value: str) -> str | None:
     text = value.strip()
+    dotted = _DOTTED_DATE.fullmatch(text)
+    if dotted:
+        try:
+            year, month, day = (int(part) for part in re.findall(r"\d+", dotted.group()))
+            return date(year, month, day).isoformat()
+        except ValueError:
+            return None
     try:
         return date.fromisoformat(text).isoformat()
     except ValueError:
@@ -53,11 +73,42 @@ def parse_unambiguous_date(value: str) -> str | None:
     return None
 
 
+def parse_explicit_korean_datetime(text: str) -> datetime | None:
+    """Replay one full Korean local clock only when its +09:00 zone is explicit."""
+    matches = list(_KOREAN_ZONED_CLOCK.finditer(text))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    remainder = text[:match.start()] + text[match.end():]
+    if _OTHER_CLOCK.search(remainder) or _dates_in_text(remainder):
+        return None
+    try:
+        local = datetime(
+            int(match.group("year")), int(match.group("km") or match.group("nm")),
+            int(match.group("kd") or match.group("nd")), int(match.group("hour")),
+            int(match.group("minute")), int(match.group("second") or 0),
+            tzinfo=timezone(timedelta(hours=9)),
+        )
+    except ValueError:
+        return None
+    weekday = match.group("weekday")
+    if weekday and weekday != _KOREAN_WEEKDAYS[local.weekday()]:
+        return None
+    return local
+
+
 def _dates_in_text(text: str) -> set[str]:
     found: set[str] = set()
     for match in _ISO_DATE.finditer(text):
         parsed = parse_unambiguous_date(match.group())
         if parsed:
+            found.add(parsed)
+    for match in _DOTTED_DATE.finditer(text):
+        parsed = parse_unambiguous_date(match.group())
+        if parsed:
+            weekday = re.match(r"\s*\(([월화수목금토일])\)", text[match.end():])
+            if weekday and weekday.group(1) != _KOREAN_WEEKDAYS[date.fromisoformat(parsed).weekday()]:
+                continue
             found.add(parsed)
     for match in _KOREAN_DATE.finditer(text):
         parsed = parse_unambiguous_date(match.group())

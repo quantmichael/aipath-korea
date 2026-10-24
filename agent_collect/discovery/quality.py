@@ -72,10 +72,13 @@ class OfficialPageEvidence:
     event_start_on: date | None = None
     event_end_on: date | None = None
     event_identity: str | None = None
+    event_start_at: datetime | None = None
+    event_end_at: datetime | None = None
 
     def __post_init__(self) -> None:
         for value in (self.checked_at, self.recruitment_start_at,
-                      self.recruitment_deadline_at):
+                      self.recruitment_deadline_at, self.event_start_at,
+                      self.event_end_at):
             if value is not None and (value.tzinfo is None or value.utcoffset() is None):
                 raise ValueError("official evidence timestamps must have a timezone")
         if urlsplit(self.source_url).scheme != "https":
@@ -83,6 +86,9 @@ class OfficialPageEvidence:
         if ((self.recruitment_start_at or self.recruitment_deadline_at) and
                 (self.recruitment_start_on or self.recruitment_deadline_on)):
             raise ValueError("do not mix exact and date-only recruitment evidence")
+        if ((self.event_start_at or self.event_end_at) and
+                (self.event_start_on or self.event_end_on)):
+            raise ValueError("do not mix exact and date-only event evidence")
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,8 +251,10 @@ class SearchQualityEvaluator:
             if evidence and (evidence.recruitment_start_at or evidence.recruitment_start_on) else None,
             (evidence.recruitment_deadline_at or evidence.recruitment_deadline_on).isoformat()
             if evidence and (evidence.recruitment_deadline_at or evidence.recruitment_deadline_on) else None,
-            evidence.event_start_on.isoformat() if evidence and evidence.event_start_on else None,
-            evidence.event_end_on.isoformat() if evidence and evidence.event_end_on else None,
+            (evidence.event_start_at or evidence.event_start_on).isoformat()
+            if evidence and (evidence.event_start_at or evidence.event_start_on) else None,
+            (evidence.event_end_at or evidence.event_end_on).isoformat()
+            if evidence and (evidence.event_end_at or evidence.event_end_on) else None,
         )
 
 

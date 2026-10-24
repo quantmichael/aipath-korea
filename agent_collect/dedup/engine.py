@@ -65,6 +65,12 @@ class DeduplicationEngine:
             raise ValueError("similarity threshold must be between 0 and 1")
         self.similarity_threshold = similarity_threshold
 
+    def compare_records(self, target: DuplicateRecord,
+                        other: DuplicateRecord) -> DuplicateStatus | None:
+        """Reuse the existing duplicate policy for a transient record preview."""
+        comparison = self._compare(target, other)
+        return comparison[2] if comparison is not None else None
+
     def check(self, candidate: QualityCandidate, records: list[DuplicateRecord]) -> QualityDuplicateResult:
         target = candidate_record(candidate)
         best: tuple[int, float, DuplicateStatus, str, DuplicateRecord] | None = None

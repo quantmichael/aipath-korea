@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any, Mapping
 from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 
@@ -30,7 +31,7 @@ from agent_collect.discovery.goal_supabase import (
     GoalExecutionWorker, GoalPlanningWorker, SupabaseGoalContext, SupabaseGoalPlans,
 )
 from agent_collect.discovery.scheduling_supabase import SupabaseDiscoverySchedules
-from agent_collect.discovery.models import DiscoveryQuery, QueryStatus
+from agent_collect.discovery.models import DiscoveryQuery, QueryStatus, SearchResultStatus
 from agent_collect.discovery.followup import FollowupLead, OfficialFollowupExplorer, ReviewedOfficialRoot
 from agent_collect.schemas.models import Vertical
 from agent_collect.schemas.status import SourceStatus
@@ -45,7 +46,11 @@ from agent_collect.extraction.providers import ExtractionProvider
 from agent_collect.extraction.providers import OpenAIExtractionProvider
 from agent_collect.extraction.runner import ExtractionRunner
 from agent_collect.normalization.runner import NormalizationRunner
-from agent_collect.metadata.evidence import usage_references_replayed
+from agent_collect.metadata.evidence import MetadataUsageRights, usage_references_replayed
+from agent_collect.metadata.search_registration import (
+    preview_scoped_direct_result, preview_scoped_followup_lead,
+    publish_one_search_preview,
+)
 from agent_collect.metadata.supabase import SupabaseMetadataEvidence
 from agent_collect.quality_gate.runner import QualityGateRunner
 from agent_collect.registry.service import SourceRegistryService, canonicalize_url
@@ -111,6 +116,7 @@ class AgentRuntime:
     documents: SupabaseRawDocumentRepository
     settings: AgentSettings
     investigation_scopes: tuple[ApprovalScope, ...] = ()
+    search_registration_permissions: tuple[tuple[ApprovalScope, MetadataUsageRights], ...] = ()
 
     @classmethod
     def connect(cls, environ: Mapping[str, str] | None = None) -> "AgentRuntime":
@@ -203,6 +209,125 @@ class AgentRuntime:
                                                now=datetime.now(timezone.utc))
                 counts["investigation_lead_count"] += len(outcome.leads)
                 counts["investigation_blocked_count"] += bool(outcome.blocked)
+        return counts
+
+    def process_search_registration(self, query_ids: tuple[str, ...]) -> dict[str, int]:
+        """Bounded opt-in handoff through reviewed scope, fresh page and Service 004.
+
+        No scope/right pair means no HTTP or DB work. Production connection does
+        not populate these pairs until a separate reviewed configuration exists.
+        """
+        counts = {"result_count": 0, "lead_count": 0, "eligible_count": 0,
+                  "published_count": 0, "held_count": 0}
+        if not self.search_registration_permissions or not query_ids:
+            return counts
+        client = getattr(self.sources, "client", None)
+        if client is None:
+            raise RuntimeError("search registration requires an Agent Supabase client")
+        repository = SupabaseDiscoveryRepository(client)
+        tables = SupabaseServiceTables(client)
+        explorer = OfficialFollowupExplorer(user_agent=self.settings.user_agent)
+        for query_id in tuple(dict.fromkeys(query_ids))[:5]:
+            if counts["result_count"] >= 5 or counts["lead_count"] >= 5:
+                break
+            query = repository.get_query(UUID(query_id))
+            if query is None or query.status is not QueryStatus.SUCCEEDED:
+                continue
+            response = (client.table("agent_search_results")
+                        .select("id", count="exact").eq("query_id", query_id)
+                        .limit(21).execute())
+            rows = response.data or []
+            if response.count is None or response.count != len(rows) or len(rows) > 20:
+                raise RuntimeError("search registration result scan incomplete")
+            for row in rows:
+                if counts["result_count"] >= 5 or counts["lead_count"] >= 5:
+                    break
+                result = repository.get_result(UUID(row["id"]))
+                if (result is None or result.query_id != query.id or
+                        result.status is not SearchResultStatus.CANDIDATE):
+                    continue
+                counts["result_count"] += 1
+                now = datetime.now(timezone.utc)
+                matches = [(scope, rights) for scope, rights in self.search_registration_permissions
+                           if (isinstance(scope, ApprovalScope) and
+                               isinstance(rights, MetadataUsageRights) and
+                               scope.reviewed_at <= now < scope.expires_at and
+                               scope.covers(result.original_url) and
+                               rights.metadata_permitted())]
+                if len(matches) != 1:
+                    counts["held_count"] += 1
+                    continue
+                scope, rights = matches[0]
+                outcome = explorer.investigate(result, scope=scope, now=now)
+                if outcome.blocked:
+                    counts["held_count"] += 1
+                    continue
+                direct_url = canonicalize_url(result.canonical_url or result.original_url)
+                direct_path = urlsplit(direct_url).path.rstrip("/")
+                direct_parent = direct_path.rpartition("/")[0] + "/"
+                direct = (direct_url in outcome.visited_urls and
+                          direct_path and direct_parent == scope.path_prefix and
+                          not urlsplit(direct_url).query)
+                if not outcome.leads and not direct:
+                    counts["held_count"] += 1
+                    continue
+                reviewed = ReviewedOfficialRoot(scope.origin, scope.reviewed_by,
+                                                "reviewed explicit license", scope.path_prefix)
+                evidence_root = ReviewedOfficialRoot(scope.origin, scope.reviewed_by,
+                                                     "reviewed permission evidence")
+                for lead in ((None,) if direct else ()) + outcome.leads:
+                    if counts["lead_count"] >= 5:
+                        break
+                    if (lead is not None and
+                            (lead.depth != 1 or lead.page_type != "INDIVIDUAL_NOTICE" or
+                             not scope.covers(lead.url))):
+                        counts["held_count"] += 1
+                        continue
+                    page_url = lead.url if lead is not None else direct_url
+                    counts["lead_count"] += 1
+                    try:
+                        officiality = explorer._fetch(
+                            scope.officiality_evidence_url, evidence_root,
+                            request_policy=lambda url: url == scope.officiality_evidence_url)
+                        terms = explorer._fetch(
+                            scope.terms_url, evidence_root,
+                            request_policy=lambda url: url == scope.terms_url)
+                        page = explorer._fetch(page_url, reviewed,
+                                               request_policy=scope.covers)
+                        if (officiality.final_url != scope.officiality_evidence_url or
+                                terms.final_url != scope.terms_url or
+                                canonicalize_url(page.final_url) != canonicalize_url(page_url)):
+                            counts["held_count"] += 1
+                            continue
+                    except (CollectionTransportError, ValueError, UnicodeError):
+                        counts["held_count"] += 1
+                        continue
+                    checked_at = datetime.now(timezone.utc)
+                    common = dict(
+                        search_result=result, page=page.content,
+                        scope=scope, rights=rights,
+                        officiality_document=officiality.content,
+                        terms_document=terms.content,
+                        permission_checked_at=checked_at,
+                        service_sources=tables.list_sources(),
+                        service_categories=tables.list_categories(),
+                        existing_rows=tables.list_opportunities(),
+                        snapshot_complete=True, fetched_at=checked_at,
+                        now=checked_at)
+                    preview = (preview_scoped_followup_lead(lead=lead, **common)
+                               if lead is not None else
+                               preview_scoped_direct_result(page_url=page_url, **common))
+                    if not preview.eligible:
+                        counts["held_count"] += 1
+                        continue
+                    counts["eligible_count"] += 1
+                    publication = publish_one_search_preview(
+                        preview, tables, publish_enabled=self.settings.publish_enabled,
+                        now=checked_at)
+                    if publication.status == "PUBLISHED":
+                        counts["published_count"] += 1
+                    elif publication.status != "DISABLED":
+                        counts["held_count"] += 1
         return counts
 
     def process_discovery_metadata(self, query_ids: tuple[str, ...]) -> dict[str, int]:
@@ -727,4 +852,6 @@ class AgentRuntime:
             lease=SupabaseAutomationLease(client), worker_id=worker_id,
             lease_seconds=self.settings.automation_lease_seconds,
             metadata_handoff=self.process_discovery_metadata,
+            search_registration_handoff=(self.process_search_registration
+                                         if self.search_registration_permissions else None),
         )

@@ -23,7 +23,8 @@ from agent_collect.discovery.quality import (
 from agent_collect.extraction.preprocess import PreparedContent, preprocess_html
 from agent_collect.extraction.schema import ExtractionStatus, StoredExtraction
 from agent_collect.extraction.validation import (
-    _dates_in_text, parse_explicit_datetime, validated_calendar_date,
+    _dates_in_text, parse_explicit_datetime, parse_explicit_korean_datetime,
+    validated_calendar_date,
 )
 from agent_collect.quality_gate.models import QualityVerification
 from agent_collect.registry.approval import source_is_collectible
@@ -360,8 +361,10 @@ def _replay_claim(name: str, claim: EvidenceClaim, prepared: PreparedContent,
     if name in _DATES:
         exact = parse_explicit_datetime(value)
         if exact is not None:
-            if not any(parse_explicit_datetime(match.group()) == exact
-                       for match in _EXACT_IN_QUOTE.finditer(claim.quote)):
+            replayed_iso = any(parse_explicit_datetime(match.group()) == exact
+                               for match in _EXACT_IN_QUOTE.finditer(claim.quote))
+            replayed_korean = parse_explicit_korean_datetime(claim.quote) == exact
+            if not replayed_iso and not replayed_korean:
                 return None, TimePrecision.UNKNOWN, "exact_time_not_replayed"
             return exact.isoformat(), TimePrecision.EXACT_TIME, None
         day = validated_calendar_date(value)

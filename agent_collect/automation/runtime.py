@@ -27,12 +27,14 @@ class AutomationRuntime:
     def __init__(self, *, enabled: bool, worker_enabled: dict[str, bool],
                  workers: dict[str, Callable[[], Any]], lease: AutomationLease,
                  worker_id: str, lease_seconds: int = 3600,
-                 metadata_handoff: Callable[[tuple[str, ...]], Any] | None = None) -> None:
+                 metadata_handoff: Callable[[tuple[str, ...]], Any] | None = None,
+                 search_registration_handoff: Callable[[tuple[str, ...]], Any] | None = None) -> None:
         if not worker_id.strip() or not 1 <= lease_seconds <= 86400:
             raise ValueError("invalid automation policy")
         self.enabled, self.worker_enabled, self.workers = enabled, worker_enabled, workers
         self.lease, self.worker_id, self.lease_seconds = lease, worker_id, lease_seconds
         self.metadata_handoff = metadata_handoff
+        self.search_registration_handoff = search_registration_handoff
 
     def status(self) -> dict[str, Any]:
         names = ("discovery", "collection", "processing", "publish")
@@ -76,15 +78,19 @@ class AutomationRuntime:
                         discovery_query_ids.extend(getattr(results[name], "query_ids", ()))
                 except Exception as error:
                     errors[name] = type(error).__name__
-                if (not dry_run and self.metadata_handoff is not None and
+                if (not dry_run and
                         (name == "discovery" or
                          name == "ai_execute" and not self.worker_enabled.get("discovery", False)) and
                         discovery_query_ids):
-                    try:
-                        results["metadata"] = self.metadata_handoff(
-                            tuple(dict.fromkeys(discovery_query_ids)))
-                    except Exception as error:
-                        errors["metadata"] = type(error).__name__
+                    for label, handoff in (("metadata", self.metadata_handoff),
+                                           ("search_registration", self.search_registration_handoff)):
+                        if handoff is None:
+                            continue
+                        try:
+                            results[label] = handoff(
+                                tuple(dict.fromkeys(discovery_query_ids)))
+                        except Exception as error:
+                            errors[label] = type(error).__name__
             summary = AutomationSummary(run_id, started, datetime.now(timezone.utc),
                                         dry_run, "PARTIAL" if errors else "COMPLETED",
                                         results, errors)
@@ -107,6 +113,7 @@ class AutomationRuntime:
                     "collection_scheduled_count": getattr(results.get("discovery"), "collection_scheduled_count", 0),
                     "collection_success_count": getattr(results.get("collection"), "success_count", 0),
                     "metadata": results.get("metadata", {}),
+                    "search_registration": results.get("search_registration", {}),
                     "errors": errors,
                 })
             return summary

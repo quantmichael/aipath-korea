@@ -14,7 +14,7 @@ from tests.test_agent_metadata_supabase import ApprovalClient, LABELLED_PAGE, _l
 
 @pytest.mark.parametrize('literal', [
     '2027-04-13 18:00', '2027-04-13 오후 6시', '2027-04-13 18시',
-    '2027-04-13 6 PM', '2027-04-13 6 p.m.', '2027-04-13 18:00 KST',
+    '2027-04-13 6 PM', '2027-04-13 6 p.m.',
     '2027-04-13T18:00+09:00 or 19:00',
 ])
 def test_unresolved_or_additional_clock_is_not_extracted_as_a_calendar_day(literal):
@@ -26,13 +26,14 @@ def test_unresolved_or_additional_clock_is_not_extracted_as_a_calendar_day(liter
     ('2027년 4월 13일', '2027-04-13'),
     ('2027-04-13T18:00+09:00', '2027-04-13T18:00+09:00'),
     ('2027-04-13T09:00:00Z', '2027-04-13T09:00:00Z'),
+    ('2027-04-13 18:00 KST', '2027-04-13T18:00:00+09:00'),
 ])
 def test_original_date_and_explicit_offset_are_preserved(literal, expected):
     assert _date_value(literal) == expected
 
 
 @pytest.mark.parametrize('literal', ['2027-04-13 18:00', '2027-04-13 오후 6시',
-                                     '2027-04-13T18:00+09:00'])
+                                     '2027-04-13T18:00+09:00', '2027-04-13 18:00 KST'])
 def test_replay_rejects_supplied_date_that_strips_the_cited_clock(literal):
     text = 'Application deadline: ' + literal
     prepared = preprocess_html(('<p>'+text+'</p>').encode(), source_url=URL, max_input_chars=12000)

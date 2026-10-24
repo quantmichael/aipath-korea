@@ -52,6 +52,10 @@ def payload() -> dict:
 
 
 class ExtractionTests(unittest.TestCase):
+    def test_explicit_korean_dotted_date_never_repairs_an_invalid_day(self):
+        self.assertEqual(parse_unambiguous_date("2026.10.30."), "2026-10-30")
+        self.assertIsNone(parse_unambiguous_date("2026.02.30."))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

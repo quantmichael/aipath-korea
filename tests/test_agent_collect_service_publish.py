@@ -30,6 +30,14 @@ NOW = datetime(2026, 10, 4, tzinfo=timezone.utc)
 
 
 class AtomicServiceTableTests(unittest.TestCase):
+    def test_partial_service_snapshot_is_rejected_before_duplicate_decision(self):
+        client = MagicMock()
+        response = client.table.return_value.select.return_value.limit.return_value.execute.return_value
+        response.count = 2
+        response.data = [{"id": str(uuid4()), "official_url": "https://example.org/one"}]
+        with self.assertRaisesRegex(RuntimeError, "opportunities scan incomplete"):
+            SupabaseServiceTables(client).list_opportunities()
+
     def test_sdk_uses_single_registration_rpc_and_no_direct_insert(self):
         client = MagicMock()
         record_id = uuid4()

@@ -18,12 +18,14 @@ class SupabaseServiceTables:
         response = (self.client.table(table).select(columns, count="exact")
                     .limit(self.max_scan + 1).execute())
         rows = response.data or []
-        if response.count is None or response.count > self.max_scan or len(rows) > self.max_scan:
+        if (response.count is None or response.count != len(rows) or
+                response.count > self.max_scan):
             raise RuntimeError(f"{table} scan incomplete")
         return rows
 
     def list_sources(self) -> list[dict[str, Any]]:
-        return self._bounded("sources", "id,name,homepage_url,is_active")
+        return self._bounded(
+            "sources", "id,name,homepage_url,source_type,collection_method,is_active")
 
     def list_categories(self) -> list[dict[str, Any]]:
         return self._bounded("categories", "id,slug,is_active")

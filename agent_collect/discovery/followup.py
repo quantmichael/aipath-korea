@@ -110,6 +110,7 @@ class FollowupLead:
     event_start: str | None = None
     event_end: str | None = None
     event_lead_days: int | None = None
+    page_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,7 +327,8 @@ class OfficialFollowupExplorer:
                     "requires_source_approval_and_official_evidence_pipeline",
                     event_start if individual else None,
                     event_end if individual else None,
-                    event_lead if individual else None))
+                    event_lead if individual else None,
+                    hashlib.sha256(response.content).hexdigest()))
             if depth >= max_depth:
                 continue
             eligible = []

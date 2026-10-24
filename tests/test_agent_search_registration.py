@@ -1,5 +1,6 @@
 from dataclasses import replace
 import hashlib
+import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1199,3 +1200,41 @@ def test_existing_robots_aware_followup_can_feed_scoped_preview_offline():
         existing_rows=[], snapshot_complete=True, fetched_at=NOW, now=NOW)
     assert preview.eligible and preview.record["official_url"] == URL
     assert "https://official.example.org/robots.txt" in transport.calls
+
+
+def test_connect_search_registration_requires_explicit_reviewed_scope_and_rights(monkeypatch):
+    from agent_collect import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "create_agent_client", lambda environ: object())
+    scope = {
+        "scope_id": "fixture", "origin": "https://official.example.org",
+        "path_prefix": "/notices/", "reviewed_by": "fixture-reviewer",
+        "reviewed_at": "2027-04-01T00:00:00+00:00",
+        "expires_at": "2027-04-02T00:00:00+00:00",
+        "officiality_evidence_url": "https://official.example.org/officiality",
+        "officiality_sha256": "a" * 64,
+        "terms_url": "https://official.example.org/terms",
+        "terms_sha256": "b" * 64, "permission_basis": "explicit_license",
+    }
+    rights = {name: {"status": "ALLOWED", "evidence_reference": "B001"}
+              for name in ("public_read", "automated_access", "fact_extract",
+                           "fact_store", "fact_display")}
+    rights.update({name: {"status": "UNVERIFIED"}
+                   for name in ("html_store", "html_redistribute", "attachment_collect")})
+    assert AgentRuntime.connect({}).search_registration_permissions == ()
+    payload = json.dumps([{"scope": scope, "usage_rights": rights}])
+    loaded = AgentRuntime.connect({"AGENT_SEARCH_REGISTRATION_PERMISSIONS_JSON": payload})
+    assert len(loaded.search_registration_permissions) == 1
+    assert loaded.search_registration_permissions[0][0].scope_id == "fixture"
+    assert loaded.search_registration_permissions[0][1].metadata_permitted()
+
+    import pytest
+    for invalid in ("[]", "{}", "bad json", json.dumps([{"scope": scope}]),
+                    json.dumps([{"scope": scope, "usage_rights": {}}]),
+                    json.dumps([{"scope": scope, "usage_rights": rights}] * 2)):
+        with pytest.raises(ValueError):
+            AgentRuntime.connect({"AGENT_SEARCH_REGISTRATION_PERMISSIONS_JSON": invalid})
+    rights["fact_display"] = {"status": "UNVERIFIED"}
+    with pytest.raises(ValueError):
+        AgentRuntime.connect({"AGENT_SEARCH_REGISTRATION_PERMISSIONS_JSON":
+                              json.dumps([{"scope": scope, "usage_rights": rights}])})

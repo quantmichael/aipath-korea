@@ -1,6 +1,7 @@
 """Runtime assembly for Agent-owned repositories; no Backend imports."""
 
 import hashlib
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -109,6 +110,29 @@ def create_agent_client(environ: Mapping[str, str] | None = None) -> Any:
     return create_client(config.url, config.service_key)
 
 
+def load_search_registration_permissions(
+    raw: str,
+) -> tuple[tuple[ApprovalScope, MetadataUsageRights], ...]:
+    """Load explicit, paired site scope and action rights; fail closed."""
+    try:
+        entries = json.loads(raw)
+    except (TypeError, ValueError) as error:
+        raise ValueError("invalid search registration permissions JSON") from error
+    if not isinstance(entries, list) or not 1 <= len(entries) <= 5:
+        raise ValueError("search registration requires one to five reviewed permissions")
+    if any(not isinstance(entry, dict) or set(entry) != {"scope", "usage_rights"}
+           for entry in entries):
+        raise ValueError("each search registration permission needs scope and usage_rights")
+    scopes = load_approval_scopes(json.dumps([entry["scope"] for entry in entries]))
+    permissions = []
+    for scope, entry in zip(scopes, entries):
+        rights = MetadataUsageRights.from_snapshot(entry["usage_rights"])
+        if rights is None or not rights.metadata_permitted():
+            raise ValueError("search registration needs reviewed metadata usage rights")
+        permissions.append((scope, rights))
+    return tuple(permissions)
+
+
 @dataclass(slots=True)
 class AgentRuntime:
     sources: SupabaseSourceRepository
@@ -126,12 +150,16 @@ class AgentRuntime:
         scopes = load_approval_scopes(raw_scopes) if raw_scopes else ()
         if len(scopes) > 5:
             raise ValueError("at most five investigation scopes are allowed")
+        raw_permissions = env.get("AGENT_SEARCH_REGISTRATION_PERMISSIONS_JSON")
+        permissions = (load_search_registration_permissions(raw_permissions)
+                       if raw_permissions is not None else ())
         return cls(
             sources=SupabaseSourceRepository(client),
             runs=SupabaseCollectionRunRepository(client),
             documents=SupabaseRawDocumentRepository(client),
             settings=load_settings(environ=environ),
             investigation_scopes=scopes,
+            search_registration_permissions=permissions,
         )
 
     def collection_runner(self, raw_dir: Path, *, environ: Mapping[str, str] | None = None) -> CollectionRunner:
@@ -214,8 +242,8 @@ class AgentRuntime:
     def process_search_registration(self, query_ids: tuple[str, ...]) -> dict[str, int]:
         """Bounded opt-in handoff through reviewed scope, fresh page and Service 004.
 
-        No scope/right pair means no HTTP or DB work. Production connection does
-        not populate these pairs until a separate reviewed configuration exists.
+        No scope/right pair means no HTTP or DB work. Production remains
+        default-off unless an explicit reviewed pair is configured.
         """
         counts = {"result_count": 0, "lead_count": 0, "eligible_count": 0,
                   "published_count": 0, "held_count": 0}

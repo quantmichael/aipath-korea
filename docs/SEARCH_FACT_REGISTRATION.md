@@ -1,0 +1,9 @@
+# Search facts registration
+
+`AGENT_SEARCH_FACT_REGISTRATION_ENABLED=true` enables the new direct search-result handoff. It defaults to false. The handoff runs after an existing Discovery Query succeeds. It inspects at most five candidate results and, when `AGENT_PUBLISH_ENABLED=true`, attempts at most one atomic Service registration per automation run. Keep `AGENT_PUBLISH_WORKER_ENABLED=false` when using a single-record canary.
+
+This path uses the public page, not a search snippet, for title, organizer, official URL, application window, application method and category. It currently accepts only HTTPS individual notices on `.go.kr` or `.ac.kr` institutional domains. A single unambiguous Korean category word in the page heading can supply the category; mixed category words are held. The existing DNS-pinned HTTP transport enforces `robots.txt`, redirect and login restrictions. An explicit prohibition on automated access or reuse in the fetched page blocks registration, including when the words are separated by HTML tags. It stores the derived facts and a page digest; it does not store or republish the page HTML or attachments. Ambiguous fields, expired recruitment, an incomplete Service snapshot, duplicate Opportunities, or a missing technical `AIPATH AI Discovery` Service Source block registration.
+
+The Service Source is a technical attribution row required by Service Migration 004; it is not an approval of a particular website. The older Source-scoped Metadata path is unchanged. The fact path does not create Source approvals or reviewer grants.
+
+The path is off in the current Production image. Deploying this code, provisioning the technical Service Source, enabling registration and publishing a real Opportunity are separate Production actions. Each requires a fresh preflight and the applicable approval. An eligible notice is not evidence that any of those actions occurred.

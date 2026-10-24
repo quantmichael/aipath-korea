@@ -10,6 +10,7 @@ import hashlib
 import re
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
+from html import unescape
 from html.parser import HTMLParser
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -291,10 +292,13 @@ def preview_fetched_search_result(*, search_result: SearchResult,
                                   snapshot_complete: bool,
                                   use_review: SearchUseReview,
                                   fetched_at: datetime,
-                                  now: datetime) -> SearchRegistrationPreview:
+                                  now: datetime,
+                                  facts_override: dict[str, PublicNoticeFact] | None = None,
+                                  ) -> SearchRegistrationPreview:
     """Turn one checked search-result page into a read-only registration preview."""
-    facts = extract_labelled_public_facts(
-        page=page, page_url=page_url, fetched_at=fetched_at, now=now)
+    facts = (dict(facts_override) if facts_override is not None else
+             extract_labelled_public_facts(
+                 page=page, page_url=page_url, fetched_at=fetched_at, now=now))
     if "title" not in facts:
         headings = _HeadingParser()
         headings.feed(page.decode("utf-8", errors="replace"))
@@ -451,36 +455,123 @@ def preview_scoped_direct_result(*, search_result: SearchResult,
     fetched page must have one matching H1 and the existing fact/evidence gate
     still decides whether it contains a complete individual opportunity.
     """
+    review = verify_scoped_publication_use(
+        scope=scope, rights=rights, target_url=page_url,
+        officiality_document=officiality_document,
+        terms_document=terms_document,
+        checked_at=permission_checked_at, now=now)
+    return _preview_direct_result(
+        search_result=search_result, page=page, page_url=page_url,
+        path_prefix=scope.path_prefix, covers=scope.covers,
+        use_review=review, service_sources=service_sources,
+        service_categories=service_categories, existing_rows=existing_rows,
+        snapshot_complete=snapshot_complete, fetched_at=fetched_at, now=now)
+
+
+def preview_public_direct_result(*, search_result: SearchResult,
+                                 page: bytes, page_url: str,
+                                 service_sources: list[dict[str, Any]],
+                                 service_categories: list[dict[str, Any]],
+                                 existing_rows: list[dict[str, Any]],
+                                 snapshot_complete: bool,
+                                 fetched_at: datetime,
+                                 now: datetime) -> SearchRegistrationPreview:
+    """Facts-only path for a public institutional notice; no raw page storage."""
+    try:
+        parts = urlsplit(page_url)
+        host = parts.hostname or ""
+        if (parts.scheme != "https" or
+                not (host.endswith(".go.kr") or host.endswith(".ac.kr")) or
+                parts.fragment):
+            return SearchRegistrationPreview(False, ("OFFICIAL_DOMAIN_UNVERIFIED",))
+        # The transport caps the response at 1 MiB. Inspect the entire page
+        # for an explicit prohibition before extraction truncates its evidence.
+        text = unescape(re.sub(r"<[^>]*>", " ",
+                               page.decode("utf-8", errors="replace")))
+        if re.search(
+                r"(?:무단\s*(?:수집|재이용)|크롤링|자동화된\s*접근)\s*금지|"
+                r"scraping\s+prohibited|automated\s+access\s+prohibited|"
+                r"republication\s+prohibited", text, re.I):
+            return SearchRegistrationPreview(False, ("EXPLICIT_USE_PROHIBITION",))
+        path = parts.path.rstrip("/")
+        parent = path.rpartition("/")[0] + "/"
+        if not path or parent == "/" or not parts.path.startswith(parent):
+            return SearchRegistrationPreview(False, ("INDIVIDUAL_PATH_UNVERIFIED",))
+    except (ValueError, TypeError, UnicodeError):
+        return SearchRegistrationPreview(False, ("PUBLIC_PAGE_UNVERIFIED",))
+    review = SearchUseReview(True, "public_institution_facts_only",
+                             f"public-facts:robots-allowed:{host}",
+                             now + timedelta(minutes=15))
+    return _preview_direct_result(
+        search_result=search_result, page=page, page_url=page_url,
+        path_prefix=parent,
+        covers=lambda target: canonicalize_url(target) == canonicalize_url(page_url),
+        use_review=review, service_sources=service_sources,
+        service_categories=service_categories, existing_rows=existing_rows,
+        snapshot_complete=snapshot_complete, fetched_at=fetched_at, now=now,
+        allow_query=True, allow_search_title_suffix=True,
+        authority=Authority.OFFICIAL_INSTITUTION)
+
+
+def _preview_direct_result(*, search_result: SearchResult,
+                           page: bytes, page_url: str, path_prefix: str,
+                           covers: Any, use_review: SearchUseReview,
+                           service_sources: list[dict[str, Any]],
+                           service_categories: list[dict[str, Any]],
+                           existing_rows: list[dict[str, Any]],
+                           snapshot_complete: bool, fetched_at: datetime,
+                           now: datetime, allow_query: bool = False,
+                           allow_search_title_suffix: bool = False,
+                           authority: Authority = Authority.OFFICIAL_ORGANIZER,
+                           ) -> SearchRegistrationPreview:
     try:
         target = canonicalize_url(page_url)
         root = canonicalize_url(search_result.canonical_url or search_result.original_url)
         path = urlsplit(target).path.rstrip("/")
         parent_directory = path.rpartition("/")[0] + "/"
-        if (target != root or not path or parent_directory != scope.path_prefix or
-                urlsplit(target).query or not scope.covers(page_url)):
+        if (target != root or not path or parent_directory != path_prefix or
+                (urlsplit(target).query and not allow_query) or not covers(page_url)):
             return SearchRegistrationPreview(False, ("DIRECT_NOTICE_SCOPE_UNVERIFIED",))
         headings = _HeadingParser()
         headings.feed(page.decode("utf-8", errors="replace"))
         expected = normalize_title(search_result.title)
-        if (not expected or len(headings.headings) != 1 or
-                normalize_title(headings.headings[0]) != expected):
+        if len(headings.headings) != 1:
+            return SearchRegistrationPreview(False, ("DIRECT_NOTICE_TITLE_UNVERIFIED",))
+        page_title = normalize_title(headings.headings[0])
+        title_matches = (page_title == expected or
+                         allow_search_title_suffix and bool(page_title) and
+                         expected.startswith(page_title) and
+                         len(page_title) / len(expected) >= 0.65)
+        if not expected or not title_matches:
             return SearchRegistrationPreview(False, ("DIRECT_NOTICE_TITLE_UNVERIFIED",))
         facts = extract_labelled_public_facts(
             page=page, page_url=page_url, fetched_at=fetched_at, now=now)
         if ("title" in facts and
-                normalize_title(facts["title"].value) != expected):
+                normalize_title(facts["title"].value) != page_title):
             return SearchRegistrationPreview(False, ("DIRECT_NOTICE_TITLE_UNVERIFIED",))
+        prepared = preprocess_html(page, source_url=page_url, max_input_chars=12000)
+        matches = [block for block in prepared.evidence_blocks
+                   if len(block.text) <= 200 and
+                   normalize_title(block.text) == page_title]
         if "title" not in facts:
-            prepared = preprocess_html(page, source_url=page_url,
-                                       max_input_chars=12000)
-            matches = [block for block in prepared.evidence_blocks
-                       if len(block.text) <= 200 and
-                       normalize_title(block.text) == expected]
             if len(matches) != 1:
                 return SearchRegistrationPreview(False, ("DIRECT_NOTICE_TITLE_UNVERIFIED",))
             facts["title"] = PublicNoticeFact(matches[0].text,
                                                matches[0].block_id,
                                                matches[0].text)
+        if allow_search_title_suffix and "category" not in facts and len(matches) == 1:
+            labels = {
+                "competition": ("경진대회", "공모전"),
+                "hackathon": ("해커톤",),
+                "education": ("교육", "부트캠프"),
+                "meetup": ("세미나", "밋업"),
+                "conference": ("컨퍼런스", "학회", "심포지엄"),
+            }
+            found = [slug for slug, words in labels.items()
+                     if any(word in headings.headings[0] for word in words)]
+            if len(found) == 1:
+                facts["category"] = PublicNoticeFact(
+                    found[0], matches[0].block_id, headings.headings[0])
         dates: dict[str, date | datetime] = {}
         for field in _DATE_FIELDS:
             fact = facts.get(field)
@@ -496,7 +587,7 @@ def preview_scoped_direct_result(*, search_result: SearchResult,
         if not deadline or (start is not None and type(start) is not type(deadline)):
             return SearchRegistrationPreview(False, ("RECRUITMENT_DATES_UNVERIFIED",))
         page_evidence = OfficialPageEvidence(
-            page_url, fetched_at, Authority.OFFICIAL_ORGANIZER,
+            page_url, fetched_at, authority,
             PageType.INDIVIDUAL_NOTICE,
             recruitment_start_at=start if isinstance(start, datetime) else None,
             recruitment_deadline_at=deadline if isinstance(deadline, datetime) else None,
@@ -509,17 +600,14 @@ def preview_scoped_direct_result(*, search_result: SearchResult,
             event_end_at=dates.get("event_end") if isinstance(dates.get("event_end"), datetime) else None)
     except (ValueError, TypeError, UnicodeError):
         return SearchRegistrationPreview(False, ("DIRECT_NOTICE_PAGE_UNVERIFIED",))
-    return preview_scoped_fetched_search_result(
-        search_result=replace(search_result, filter_reasons=()),
+    return preview_fetched_search_result(
+        search_result=replace(search_result, title=headings.headings[0], filter_reasons=()),
         page=page, page_url=page_url, official_page=page_evidence,
-        scope=scope, rights=rights,
-        officiality_document=officiality_document,
-        terms_document=terms_document,
-        permission_checked_at=permission_checked_at,
         service_sources=service_sources,
         service_categories=service_categories,
         existing_rows=existing_rows,
-        snapshot_complete=snapshot_complete,
+        snapshot_complete=snapshot_complete, use_review=use_review,
+        facts_override=facts,
         fetched_at=fetched_at, now=now)
 
 

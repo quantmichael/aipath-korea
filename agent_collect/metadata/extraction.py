@@ -38,7 +38,7 @@ _LABELS = {
     "event_start": re.compile(r"^(?:event starts?|행사 시작|개최 시작)\s*[:：]?\s*(.+)$", re.I),
     "event_end": re.compile(r"^(?:event ends?|행사 종료|개최 종료)\s*[:：]?\s*(.+)$", re.I),
     "application_method": re.compile(
-        r"^(?:application method|how to apply|신청 방법|접수 방법)\s*[:：]\s*(.+)$", re.I),
+        r"^(?:application method|how to apply|신청\s*방법|접수\s*방법)\s*[:：]\s*(.+)$", re.I),
     "category": re.compile(r"^(?:category|분류|유형)\s*[:：]\s*(.+)$", re.I),
 }
 _DATES = frozenset({"application_start", "application_deadline", "event_start", "event_end"})

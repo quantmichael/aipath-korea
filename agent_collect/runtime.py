@@ -50,7 +50,7 @@ from agent_collect.normalization.runner import NormalizationRunner
 from agent_collect.metadata.evidence import MetadataUsageRights, usage_references_replayed
 from agent_collect.metadata.search_registration import (
     preview_scoped_direct_result, preview_scoped_followup_lead,
-    publish_one_search_preview,
+    preview_public_direct_result, publish_one_search_preview,
 )
 from agent_collect.metadata.supabase import SupabaseMetadataEvidence
 from agent_collect.quality_gate.runner import QualityGateRunner
@@ -141,6 +141,7 @@ class AgentRuntime:
     settings: AgentSettings
     investigation_scopes: tuple[ApprovalScope, ...] = ()
     search_registration_permissions: tuple[tuple[ApprovalScope, MetadataUsageRights], ...] = ()
+    search_fact_registration_enabled: bool = False
 
     @classmethod
     def connect(cls, environ: Mapping[str, str] | None = None) -> "AgentRuntime":
@@ -153,6 +154,9 @@ class AgentRuntime:
         raw_permissions = env.get("AGENT_SEARCH_REGISTRATION_PERMISSIONS_JSON")
         permissions = (load_search_registration_permissions(raw_permissions)
                        if raw_permissions is not None else ())
+        raw_fact_flag = env.get("AGENT_SEARCH_FACT_REGISTRATION_ENABLED", "false")
+        if raw_fact_flag.strip().lower() not in {"true", "false"}:
+            raise ValueError("AGENT_SEARCH_FACT_REGISTRATION_ENABLED must be true or false")
         return cls(
             sources=SupabaseSourceRepository(client),
             runs=SupabaseCollectionRunRepository(client),
@@ -160,6 +164,7 @@ class AgentRuntime:
             settings=load_settings(environ=environ),
             investigation_scopes=scopes,
             search_registration_permissions=permissions,
+            search_fact_registration_enabled=raw_fact_flag.strip().lower() == "true",
         )
 
     def collection_runner(self, raw_dir: Path, *, environ: Mapping[str, str] | None = None) -> CollectionRunner:
@@ -247,6 +252,8 @@ class AgentRuntime:
         """
         counts = {"result_count": 0, "lead_count": 0, "eligible_count": 0,
                   "published_count": 0, "held_count": 0}
+        if self.search_fact_registration_enabled:
+            return self._process_public_search_facts(query_ids)
         if not self.search_registration_permissions or not query_ids:
             return counts
         client = getattr(self.sources, "client", None)
@@ -355,6 +362,85 @@ class AgentRuntime:
                         counts["published_count"] += 1
                     elif publication.status != "DISABLED":
                         counts["held_count"] += 1
+        return counts
+
+    def _process_public_search_facts(self, query_ids: tuple[str, ...]) -> dict[str, int]:
+        """Inspect bounded official institutional notices, publish at most one.
+
+        This policy never creates a Source approval or stores page HTML. Robots,
+        HTTPS/redirect and login restrictions remain in the existing transport.
+        """
+        counts = {"result_count": 0, "lead_count": 0, "eligible_count": 0,
+                  "published_count": 0, "held_count": 0}
+        if not query_ids:
+            return counts
+        publication_attempted = False
+        client = getattr(self.sources, "client", None)
+        if client is None:
+            raise RuntimeError("search registration requires an Agent Supabase client")
+        repository = SupabaseDiscoveryRepository(client)
+        tables = SupabaseServiceTables(client)
+        explorer = OfficialFollowupExplorer(user_agent=self.settings.user_agent)
+        for query_id in tuple(dict.fromkeys(query_ids))[:5]:
+            if counts["result_count"] >= 5 or publication_attempted:
+                break
+            query = repository.get_query(UUID(query_id))
+            if query is None or query.status is not QueryStatus.SUCCEEDED:
+                continue
+            response = (client.table("agent_search_results")
+                        .select("id", count="exact").eq("query_id", query_id)
+                        .limit(21).execute())
+            rows = response.data or []
+            if response.count is None or response.count != len(rows) or len(rows) > 20:
+                raise RuntimeError("search registration result scan incomplete")
+            for row in rows:
+                if counts["result_count"] >= 5 or publication_attempted:
+                    break
+                result = repository.get_result(UUID(row["id"]))
+                if (result is None or result.query_id != query.id or
+                        result.status is not SearchResultStatus.CANDIDATE):
+                    continue
+                counts["result_count"] += 1
+                try:
+                    target = canonicalize_url(result.canonical_url or result.original_url)
+                    parts = urlsplit(target)
+                    host = parts.hostname or ""
+                    if (parts.scheme != "https" or
+                            not (host.endswith(".go.kr") or host.endswith(".ac.kr"))):
+                        counts["held_count"] += 1
+                        continue
+                    root = ReviewedOfficialRoot(
+                        f"https://{host}", "automated-facts-policy",
+                        "public institutional facts only")
+                    page = explorer._fetch(target, root,
+                                           request_policy=lambda url: url == target)
+                    if canonicalize_url(page.final_url) != target:
+                        counts["held_count"] += 1
+                        continue
+                    checked_at = datetime.now(timezone.utc)
+                    preview = preview_public_direct_result(
+                        search_result=result, page=page.content,
+                        page_url=page.final_url,
+                        service_sources=tables.list_sources(),
+                        service_categories=tables.list_categories(),
+                        existing_rows=tables.list_opportunities(),
+                        snapshot_complete=True, fetched_at=checked_at,
+                        now=checked_at)
+                except (CollectionTransportError, ValueError, UnicodeError):
+                    counts["held_count"] += 1
+                    continue
+                if not preview.eligible:
+                    counts["held_count"] += 1
+                    continue
+                counts["eligible_count"] += 1
+                published = publish_one_search_preview(
+                    preview, tables, publish_enabled=self.settings.publish_enabled)
+                if self.settings.publish_enabled:
+                    publication_attempted = True
+                if published.status == "PUBLISHED":
+                    counts["published_count"] += 1
+                elif published.status != "DISABLED":
+                    counts["held_count"] += 1
         return counts
 
     def process_discovery_metadata(self, query_ids: tuple[str, ...]) -> dict[str, int]:
@@ -880,5 +966,6 @@ class AgentRuntime:
             lease_seconds=self.settings.automation_lease_seconds,
             metadata_handoff=self.process_discovery_metadata,
             search_registration_handoff=(self.process_search_registration
-                                         if self.search_registration_permissions else None),
+                                         if (self.search_registration_permissions or
+                                             self.search_fact_registration_enabled) else None),
         )

@@ -16,7 +16,8 @@ from agent_collect.metadata.evidence import MetadataUsageRights
 from agent_collect.metadata.extraction import PublicNoticeFact, extract_labelled_public_facts
 from agent_collect.metadata.search_registration import (
     SearchUseReview,
-    preview_fetched_search_result, preview_scoped_fetched_search_result,
+    preview_fetched_search_result, preview_public_direct_result,
+    preview_scoped_fetched_search_result,
     preview_scoped_direct_result, preview_scoped_followup_lead,
     preview_search_registration,
     publish_one_search_preview,
@@ -28,6 +29,7 @@ from tests.test_agent_collect_discovery_followup import FakeTransport, page as h
 
 NOW = datetime(2027, 4, 1, tzinfo=timezone.utc)
 URL = "https://official.example.org/notices/ai-competition-2027"
+PUBLIC_URL = "https://city.go.kr/notices/ai-competition-2027"
 
 
 def _fact(value, ref):
@@ -61,6 +63,159 @@ def _inputs():
                 page_sha256="a" * 64,
                 existing_rows=[],
                 snapshot_complete=True, now=NOW)
+
+
+def _public_preview(*, url=PUBLIC_URL, body=None, title="AI Competition"):
+    values = _inputs()
+    page = body or (
+        "<h1>AI Competition</h1>"
+        "<p>Organizer: City Government</p>"
+        "<p>Application starts: 2027-04-02</p>"
+        "<p>Application deadline: 2027-04-13</p>"
+        "<p>Application method: Apply on the official page</p>"
+        "<p>Category: competition</p>")
+    result = replace(values["search_result"], title=title,
+                     original_url=url, canonical_url=url)
+    return preview_public_direct_result(
+        search_result=result, page=page.encode(), page_url=url,
+        service_sources=values["service_sources"],
+        service_categories=[{"id": str(values["category_id"]),
+                             "slug": "competition", "is_active": True}],
+        existing_rows=[], snapshot_complete=True, fetched_at=NOW, now=NOW)
+
+
+def test_public_facts_only_notice_is_bounded_and_requires_page_evidence():
+    ready = _public_preview()
+    assert ready.eligible, ready.reasons
+    assert ready.record["official_url"] == PUBLIC_URL
+    assert ready.evidence["application_deadline"]["source_date"] == "2027-04-13"
+    assert "untrusted search snippet" not in str(ready.record)
+    assert "OFFICIAL_DOMAIN_UNVERIFIED" in _public_preview(
+        url=URL).reasons
+    assert "DIRECT_NOTICE_TITLE_UNVERIFIED" in _public_preview(
+        body="<h1>Other notice</h1><p>Category: competition</p>").reasons
+    assert "EXPLICIT_USE_PROHIBITION" in _public_preview(
+        body="<h1>AI Competition</h1><p>무단 수집 금지</p>").reasons
+    assert "EXPLICIT_USE_PROHIBITION" in _public_preview(
+        body="<h1>AI Competition</h1><p>무단 <strong>수집</strong> 금지</p>").reasons
+    assert "EXPLICIT_USE_PROHIBITION" in _public_preview(
+        body="<h1>AI Competition</h1><p>크롤링 금지</p>").reasons
+    query_notice = "https://city.go.kr/www/view.do?noticeId=123"
+    assert _public_preview(url=query_notice).eligible
+    korean = _public_preview(
+        title="2027 AI 경진대회 참가자 모집 | 시청",
+        body=("<h1>2027 AI 경진대회 참가자 모집</h1>"
+              "<p>주최: 시청</p>"
+              "<p>접수기간: 2027.04.02. ~ 2027.04.13.</p>"
+              "<p>신청방법: 공식 홈페이지에서 신청</p>"))
+    assert korean.eligible, korean.reasons
+    assert korean.record["title"] == "2027 AI 경진대회 참가자 모집"
+    ambiguous = _public_preview(
+        title="2027 AI 해커톤 경진대회 참가자 모집",
+        body=("<h1>2027 AI 해커톤 경진대회 참가자 모집</h1>"
+              "<p>주최: 시청</p><p>접수기간: 2027.04.02. ~ 2027.04.13.</p>"
+              "<p>신청방법: 공식 홈페이지에서 신청</p>"))
+    assert not ambiguous.eligible
+    assert "REQUIRED_PAGE_FACT_MISSING" in ambiguous.reasons
+
+
+def test_public_facts_runtime_handoff_uses_existing_discovery_and_publish_flag(monkeypatch):
+    from agent_collect import runtime as runtime_module
+
+    now = datetime.now(timezone.utc)
+    start = (now + timedelta(days=30)).date().isoformat()
+    deadline = (now + timedelta(days=60)).date().isoformat()
+    query_id = uuid4()
+    query = DiscoveryQuery(query_id, "synthetic search", "fake", now,
+                           status=QueryStatus.SUCCEEDED)
+    result = SearchResult(uuid4(), query_id, "fake", 1, "AI Competition",
+                          PUBLIC_URL, "untrusted snippet", now,
+                          canonical_url=PUBLIC_URL,
+                          status=SearchResultStatus.CANDIDATE)
+    results = [result]
+    page = (f"<h1>AI Competition</h1><p>Organizer: City Government</p>"
+            f"<p>Application starts: {start}</p>"
+            f"<p>Application deadline: {deadline}</p>"
+            "<p>Application method: Apply on the official page</p>"
+            "<p>Category: competition</p>")
+    class PublicTransport(FakeTransport):
+        def fetch(self, url, **kwargs):
+            if url == "https://city.go.kr/robots.txt":
+                self.calls.append(url)
+                return http_page(url, "User-agent: *\nAllow: /")
+            return super().fetch(url, **kwargs)
+
+    transport = PublicTransport({PUBLIC_URL: http_page(PUBLIC_URL, page)})
+
+    class QueryRows:
+        def select(self, *args, **kwargs): return self
+        def eq(self, *args): return self
+        def limit(self, value): return self
+        def execute(self):
+            return SimpleNamespace(data=[{"id": str(item.id)} for item in results],
+                                   count=len(results))
+
+    class Client:
+        def table(self, name):
+            assert name == "agent_search_results"
+            return QueryRows()
+
+    class Repository:
+        def __init__(self, client): pass
+        def get_query(self, identity): return query if identity == query_id else None
+        def get_result(self, identity):
+            return next((item for item in results if item.id == identity), None)
+
+    class Tables:
+        def __init__(self): self.writes = 0
+        def list_sources(self): return _inputs()["service_sources"]
+        def list_categories(self):
+            return [{"id": str(_inputs()["category_id"]), "slug": "competition",
+                     "is_active": True}]
+        def list_opportunities(self): return []
+        def register_opportunity(self, record, evidence):
+            self.writes += 1
+            return {**record, "id": str(uuid4())}, "registered"
+
+    class Lease:
+        def __init__(self, client): pass
+        def acquire(self, **kwargs): return True
+        def release(self, claim_id): return True
+        def record_summary(self, details): pass
+
+    class Discovery:
+        def run_once(self, *, dry_run):
+            return SimpleNamespace(query_ids=() if dry_run else (str(query_id),))
+
+    tables = Tables()
+    monkeypatch.setattr(runtime_module, "SupabaseDiscoveryRepository", Repository)
+    monkeypatch.setattr(runtime_module, "SupabaseServiceTables", lambda client: tables)
+    monkeypatch.setattr(runtime_module, "OfficialFollowupExplorer",
+                        lambda **kwargs: OfficialFollowupExplorer(transport=transport))
+    monkeypatch.setattr(runtime_module, "SupabaseAutomationLease", Lease)
+    monkeypatch.setattr(AgentRuntime, "discovery_worker",
+                        lambda self, worker_id: Discovery())
+    monkeypatch.setattr(AgentRuntime, "process_discovery_metadata",
+                        lambda self, ids: {"processed_count": 0})
+    settings = replace(load_settings(environ={}), automation_enabled=True,
+                       discovery_enabled=True, discovery_worker_enabled=True)
+    agent = AgentRuntime(SimpleNamespace(client=Client()), None, None, settings,
+                         search_fact_registration_enabled=True)
+    runtime = agent.automation_runtime(Path("/unused"), worker_id="synthetic")
+    dry = runtime.run_once(dry_run=True)
+    assert "search_registration" not in dry.results and transport.calls == []
+    shadow = runtime.run_once()
+    assert shadow.status == "COMPLETED", shadow.errors
+    assert shadow.results["search_registration"]["eligible_count"] == 1
+    assert shadow.results["search_registration"]["published_count"] == 0
+    assert tables.writes == 0
+    results.append(replace(result, id=uuid4(), rank=2))
+    agent.settings = replace(settings, publish_enabled=True)
+    live = runtime.run_once()
+    assert live.status == "COMPLETED", live.errors
+    assert live.results["search_registration"]["published_count"] == 1
+    assert live.results["search_registration"]["result_count"] == 1
+    assert tables.writes == 1
 
 
 def test_korean_application_period_replays_each_date_without_inference():
@@ -1238,3 +1393,16 @@ def test_connect_search_registration_requires_explicit_reviewed_scope_and_rights
     with pytest.raises(ValueError):
         AgentRuntime.connect({"AGENT_SEARCH_REGISTRATION_PERMISSIONS_JSON":
                               json.dumps([{"scope": scope, "usage_rights": rights}])})
+
+
+def test_public_fact_handoff_is_explicitly_default_off(monkeypatch):
+    from agent_collect import runtime as runtime_module
+    import pytest
+
+    monkeypatch.setattr(runtime_module, "create_agent_client", lambda environ: object())
+    assert not AgentRuntime.connect({}).search_fact_registration_enabled
+    assert AgentRuntime.connect({
+        "AGENT_SEARCH_FACT_REGISTRATION_ENABLED": "true",
+    }).search_fact_registration_enabled
+    with pytest.raises(ValueError):
+        AgentRuntime.connect({"AGENT_SEARCH_FACT_REGISTRATION_ENABLED": "maybe"})

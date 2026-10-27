@@ -2,7 +2,7 @@
 {% block main %}
 <div class="wrap listing">
   <header class="page-heading"><a class="breadcrumb" href="{{ prefix }}/">홈 /</a><p class="eyebrow">{{ title }}</p><h1 id="list-title" tabindex="-1">{{ description }}</h1><p>{{ {'ai_now':'무엇이 달라졌고, 나에게 어떤 의미인지. 조건과 근거를 함께 읽습니다.','ai_tips':'작은 과제 하나부터. 준비하고, 따라 하고, 결과를 직접 확인합니다.','prompt_lab':'필요한 입력을 가져가세요. 변수와 사용 조건을 먼저 확인하세요.'}[current_section] }}</p></header>
-  <div class="card-grid listing-grid">{% for article in articles %}{{ card(article, sections, pilot) }}{% else %}{{ empty(prefix) }}{% endfor %}</div>
+  <div class="card-grid listing-grid">{% for article in articles %}{{ card(article, sections, pilot, public_shell) }}{% else %}{{ empty(prefix) }}{% endfor %}</div>
   {% if pages > 1 %}<nav class="pagination" aria-label="페이지 번호">{% for i in range(1, pages+1) %}<a href="?page={{ i }}#list-title" {% if i == number %}aria-current="page"{% endif %}>{{ i }}</a>{% endfor %}</nav>{% endif %}
 </div>
 {% endblock %}

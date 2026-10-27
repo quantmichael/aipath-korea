@@ -1,6 +1,6 @@
-{% macro card(article, sections, pilot=False) %}
+{% macro card(article, sections, pilot=False, public_shell=False) %}
 <article class="content-card">
-  <div class="card-top"><span>{{ sections[article.section][1] }}</span><span class="fixture-tag">{{ '검토 중' if pilot else '모의 콘텐츠' }}</span></div>
+  <div class="card-top"><span>{{ sections[article.section][1] }}</span>{% if pilot or not public_shell %}<span class="fixture-tag">{{ '검토 중' if pilot else '모의 콘텐츠' }}</span>{% endif %}</div>
   <h3><a href="{{ article.path }}">{{ article.title }}</a></h3>
   <p>{{ article.summary }}</p>
   <div class="card-bottom"><span>확인 {{ article.verified_at|date }}</span><span aria-hidden="true">↗</span></div>

@@ -103,14 +103,17 @@ def create_app(store: Path = DEFAULT_STORE, *, pilot_token: str | None = None,
         visible.sort(key=lambda c: instant(c["published_at"] if mode == "demo" else c["verified_at"]), reverse=True)
         return visible, b
 
+    @app.head("/robots.txt", response_class=PlainTextResponse)
     @app.get("/robots.txt", response_class=PlainTextResponse)
     def robots():
         return "User-agent: *\nAllow: /\n" if public_shell else "User-agent: *\nDisallow: /\n"
 
+    @app.head("/sitemap.xml")
     @app.get("/sitemap.xml")
     def sitemap():
         return Response('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>', media_type="application/xml")
 
+    @app.head("/{path:path}", response_class=HTMLResponse)
     @app.get("/{path:path}", response_class=HTMLResponse)
     def page(request: Request, path: str):
         path = path.rstrip("/")

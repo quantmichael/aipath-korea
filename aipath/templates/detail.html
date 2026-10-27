@@ -1,0 +1,35 @@
+{% extends "base.html" %}{% from "macros.html" import card %}
+{% block main %}
+{% set p = article.section_payload %}
+<article class="reading wrap">
+  <header class="article-heading">
+    <a class="breadcrumb" href="{{ prefix }}/{{ sections[article.section][0] }}">← {{ sections[article.section][1] }} · {{ sections[article.section][2] }}</a>
+    <div class="article-labels"><span class="eyebrow">{{ sections[article.section][1] }}</span><span class="fixture-tag">{{ '검토 중' if pilot else '모의 콘텐츠' }}</span></div>
+    <h1>{{ article.title }}</h1><p class="article-summary">{{ article.summary }}</p>
+    <div class="article-meta"><span>{{ '미게시 초안' if pilot else '모의 공개 ' ~ (article.published_at|date) ~ ' KST' }}</span><span>확인 {{ article.verified_at|date }} KST</span><span>{{ 'AI 보조 작성' if article.ai_assisted else 'AI 보조 미사용' }}</span></div>
+    {% if article.stale %}<p class="notice">이 정보는 재확인이 필요합니다. 적용 전 원문을 확인하세요.</p>{% endif %}
+    {% if article.correction_note %}<p class="notice">정정 {{ article.updated_at|date }} KST · {{ article.correction_note }}</p>{% endif %}
+  </header>
+  <div class="prose">{{ article.body_markdown|markdown }}</div>
+  <div class="prose section-blocks">
+  {% if article.section == 'ai_now' %}
+    {% for key,label in [('what_changed','무엇이 바뀌었나요'),('why_it_matters','왜 중요한가요'),('who_is_affected','누구에게 해당하나요'),('availability','이용 조건'),('limitations','알아둘 한계'),('next_action','지금 할 수 있는 일')] %}<section><h2>{{ label }}</h2><p>{{ p[key] }}</p></section>{% endfor %}
+  {% elif article.section == 'ai_tips' %}
+    <section class="condition-box"><h2>시작하기 전에</h2><p>{{ p.task }}</p><ul>{% for item in p.prerequisites %}<li>{{ item }}</li>{% endfor %}</ul></section>
+    <section><h2>하나씩 따라 해 보세요</h2><ol class="steps">{% for step in p.steps %}<li>{{ step }}</li>{% endfor %}</ol></section>
+    <section><h2>입력 예시</h2><pre>{{ p.example_input }}</pre><h2>{{ '결과 예시' if pilot else '결과 예시 · 가상 출력' }}</h2><pre>{{ p.example_result }}</pre></section>
+    <section><h2>원하는 결과가 나오지 않았다면</h2><ul>{% for item in p.troubleshooting %}<li>{{ item }}</li>{% endfor %}</ul></section>
+  {% else %}
+    <section class="condition-box"><h2>이럴 때 사용하세요</h2><p>{{ p.purpose }}</p><h3>이런 용도로는 적합하지 않아요</h3><ul>{% for item in p.not_for %}<li>{{ item }}</li>{% endfor %}</ul></section>
+    <section><h2>먼저, 변수를 확인하세요</h2><p>복사한 뒤 외부 도구에서 아래 변수를 바꾸세요.</p><dl class="variables">{% for v in p.variables %}<dt><code>{{ '{{' ~ v.name ~ '}}' }}</code><span>{{ '필수' if v.required else '선택' }}</span></dt><dd>{{ v.description }}<small>예: {{ v.example }}</small></dd>{% endfor %}</dl></section>
+    <section class="prompt-box"><div class="prompt-top"><h2>바로 가져갈 프롬프트</h2><button id="copy-prompt" type="button">프롬프트 복사 <span aria-hidden="true">⧉</span></button></div><pre id="prompt-template" tabindex="0" aria-label="복사할 프롬프트 원문">{{ p.template }}</pre><p id="copy-status" role="status" aria-live="polite">변수는 그대로 복사됩니다. 필요한 내용으로 바꿔 사용하세요.</p></section>
+    <section><h2>완성 입력 예시</h2><pre>{{ p.example_input }}</pre><h2>{{ '결과 형태' if pilot else '결과 형태 · 가상 출력' }}</h2><pre>{{ p.example_output }}</pre></section>
+    <section><h2>사용할 때 기억하세요</h2><ul>{% for item in p.limitations %}<li>{{ item }}</li>{% endfor %}</ul></section>
+  {% endif %}
+  {% if p.tests %}<section><h2>{{ '테스트 조건 · 확인 기록' if pilot else '테스트 조건 · 모의 기록' }}</h2>{% for test in p.tests %}<div class="test-record"><h3>{{ test.input_summary }}</h3><p>{{ test.tool_name }} / {{ test.model_version }}</p><p>{{ test.plan_or_environment }} · {{ test.tested_at|date }} KST</p><p>{{ test.observed_result }}</p><p class="muted">{{ test.limitations }}</p></div>{% endfor %}</section>{% endif %}
+  <section class="sources"><h2>출처와 확인 기준</h2>{% for source in article.sources %}<div><h3>{% if source.url %}<a href="{{ source.url }}">{{ source.title }} ↗</a>{% else %}{{ source.title }}{% endif %}</h3><p>{{ source.author or '작성자 미확인' }} · {{ ('원문 게시 ' ~ (source.source_published_at|date)) if source.source_published_at else '원문 게시일 미확인' }}</p>{% if source.license %}<p>라이선스: {{ source.license }}</p>{% endif %}{% if source.changes %}<p>{{ source.changes }}</p>{% endif %}</div>{% endfor %}<a href="mailto:contact@aipath.kr">정정·삭제 요청: contact@aipath.kr ↗</a></section>
+  </div>
+  {% if related %}<aside class="related"><h2>이어서 활용해 보세요</h2>{% for item in related %}{{ card(item, sections, pilot) }}{% endfor %}</aside>{% endif %}
+  <a class="back-link" href="{{ prefix }}/{{ sections[article.section][0] }}">← {{ sections[article.section][1] }} 목록으로</a>
+</article>
+{% endblock %}

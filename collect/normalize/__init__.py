@@ -1,2 +1,0 @@
-"""Candidate normalization helpers."""
-

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="{{ 'index,follow' if public_shell else 'noindex,nofollow,noarchive' }}">
+  <title>{{ title }} · AIPATH</title>
+  <meta name="description" content="{{ description }}">
+  <link rel="icon" href="/static/symbol.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/site.css">
+  <script src="/static/site.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">본문 바로가기</a>
+  {% if not public_shell %}<div class="preview-bar"><span class="preview-dot" aria-hidden="true"></span>{{ '로컬 데모 · 모든 콘텐츠는 모의 자료이며 실제 소식·실험 결과가 아닙니다.' if demo else ('비공개 초안 미리보기 · 검토 중이며 아직 게시되지 않았습니다.' if pilot else '로컬 미리보기 · 아직 공개된 콘텐츠가 없습니다.') }}</div>{% endif %}
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="logo" href="{{ prefix }}/" aria-label="AIPATH 홈"><img src="/static/aipath_logo.png" width="145" height="145" alt="AI PATH"></a>
+      <nav aria-label="주 메뉴">
+        {% for key, section in sections.items() %}
+        <a href="{{ prefix }}/{{ section[0] }}" {% if current_section is defined and current_section == key %}aria-current="page"{% endif %}>{{ section[1] }}</a>
+        {% endfor %}
+      </nav>
+      <span class="header-note">이해에서 활용까지</span>
+    </div>
+  </header>
+  <main id="main" tabindex="-1">{% block main %}{% endblock %}</main>
+  <footer class="wrap site-footer">
+    <div><a class="footer-brand" href="{{ prefix }}/">AIPATH<span>AI의 변화, 나의 가능성.</span></a><p>이해하고, 적용하고, 나의 것으로.</p></div>
+    <div class="footer-links"><a href="{{ prefix }}/editorial-policy">편집·출처 정책</a><a href="mailto:contact@aipath.kr">문의·정정·삭제 요청 ↗<span>contact@aipath.kr</span></a></div>
+    <p class="copyright">© 2026 AIPATH · 한국어 AI 지식·활용 플랫폼</p>
+  </footer>
+</body>
+</html>

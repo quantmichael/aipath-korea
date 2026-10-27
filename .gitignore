@@ -1,41 +1,7 @@
-# 환경 변수와 비밀키
-.env
-.env.*
-!.env.example
-
-# Python
-__pycache__/
-*.py[cod]
 .venv/
-venv/
-
-# Node.js
-node_modules/
-
-# 편집기와 운영체제
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-
-# 빌드 및 배포 파일
-.vercel/
-dist/
-build/
-.vercel
-tmp/
-
-# Local credentials and raw Agent artifacts must never be committed.
-credentials/
-secrets/
-*.pem
-*.p12
-*.pfx
-*.key
-*service-account*.json
-*credentials*.json
-*secret*.json
-*token*.json
-agent_raw_content/
-raw_content/
-logs/
+__pycache__/
+.pytest_cache/
+.runtime/
+.env*
+!.env.example
+*.pyc

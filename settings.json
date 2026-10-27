@@ -1,0 +1,7 @@
+{
+  "publication_mode": "disabled",
+  "source_connectors_enabled": false,
+  "external_ai_enabled": false,
+  "analytics_enabled": false,
+  "production_target": null
+}

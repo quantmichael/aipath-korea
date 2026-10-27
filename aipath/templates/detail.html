@@ -4,9 +4,9 @@
 <article class="reading wrap">
   <header class="article-heading">
     <a class="breadcrumb" href="{{ prefix }}/{{ sections[article.section][0] }}">← {{ sections[article.section][1] }} · {{ sections[article.section][2] }}</a>
-    <div class="article-labels"><span class="eyebrow">{{ sections[article.section][1] }}</span><span class="fixture-tag">{{ '검토 중' if pilot else '모의 콘텐츠' }}</span></div>
+    <div class="article-labels"><span class="eyebrow">{{ sections[article.section][1] }}</span>{% if pilot or not public_shell %}<span class="fixture-tag">{{ '검토 중' if pilot else '모의 콘텐츠' }}</span>{% endif %}</div>
     <h1>{{ article.title }}</h1><p class="article-summary">{{ article.summary }}</p>
-    <div class="article-meta"><span>{{ '미게시 초안' if pilot else '모의 공개 ' ~ (article.published_at|date) ~ ' KST' }}</span><span>확인 {{ article.verified_at|date }} KST</span><span>{{ 'AI 보조 작성' if article.ai_assisted else 'AI 보조 미사용' }}</span></div>
+    <div class="article-meta"><span>{{ '미게시 초안' if pilot else ('공개 ' if public_shell else '모의 공개 ') ~ (article.published_at|date) ~ ' KST' }}</span><span>확인 {{ article.verified_at|date }} KST</span><span>{{ 'AI 보조 작성' if article.ai_assisted else 'AI 보조 미사용' }}</span></div>
     {% if article.stale %}<p class="notice">이 정보는 재확인이 필요합니다. 적용 전 원문을 확인하세요.</p>{% endif %}
     {% if article.correction_note %}<p class="notice">정정 {{ article.updated_at|date }} KST · {{ article.correction_note }}</p>{% endif %}
   </header>
@@ -26,10 +26,10 @@
     <section><h2>완성 입력 예시</h2><pre>{{ p.example_input }}</pre><h2>{{ '결과 형태' if pilot else '결과 형태 · 가상 출력' }}</h2><pre>{{ p.example_output }}</pre></section>
     <section><h2>사용할 때 기억하세요</h2><ul>{% for item in p.limitations %}<li>{{ item }}</li>{% endfor %}</ul></section>
   {% endif %}
-  {% if p.tests %}<section><h2>{{ '테스트 조건 · 확인 기록' if pilot else '테스트 조건 · 모의 기록' }}</h2>{% for test in p.tests %}<div class="test-record"><h3>{{ test.input_summary }}</h3><p>{{ test.tool_name }} / {{ test.model_version }}</p><p>{{ test.plan_or_environment }} · {{ test.tested_at|date }} KST</p><p>{{ test.observed_result }}</p><p class="muted">{{ test.limitations }}</p></div>{% endfor %}</section>{% endif %}
+  {% if p.tests %}<section><h2>{{ '테스트 조건 · 확인 기록' if pilot or public_shell else '테스트 조건 · 모의 기록' }}</h2>{% for test in p.tests %}<div class="test-record"><h3>{{ test.input_summary }}</h3><p>{{ test.tool_name }} / {{ test.model_version }}</p><p>{{ test.plan_or_environment }} · {{ test.tested_at|date }} KST</p><p>{{ test.observed_result }}</p><p class="muted">{{ test.limitations }}</p></div>{% endfor %}</section>{% endif %}
   <section class="sources"><h2>출처와 확인 기준</h2>{% for source in article.sources %}<div><h3>{% if source.url %}<a href="{{ source.url }}">{{ source.title }} ↗</a>{% else %}{{ source.title }}{% endif %}</h3><p>{{ source.author or '작성자 미확인' }} · {{ ('원문 게시 ' ~ (source.source_published_at|date)) if source.source_published_at else '원문 게시일 미확인' }}</p>{% if source.license %}<p>라이선스: {{ source.license }}</p>{% endif %}{% if source.changes %}<p>{{ source.changes }}</p>{% endif %}</div>{% endfor %}<a href="mailto:contact@aipath.kr">정정·삭제 요청: contact@aipath.kr ↗</a></section>
   </div>
-  {% if related %}<aside class="related"><h2>이어서 활용해 보세요</h2>{% for item in related %}{{ card(item, sections, pilot) }}{% endfor %}</aside>{% endif %}
+  {% if related %}<aside class="related"><h2>이어서 활용해 보세요</h2>{% for item in related %}{{ card(item, sections, pilot, public_shell) }}{% endfor %}</aside>{% endif %}
   <a class="back-link" href="{{ prefix }}/{{ sections[article.section][0] }}">← {{ sections[article.section][1] }} 목록으로</a>
 </article>
 {% endblock %}

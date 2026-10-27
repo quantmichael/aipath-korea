@@ -22,7 +22,7 @@
 {% for key, section in sections.items() %}
 <section class="feed-section" aria-labelledby="{{ key }}-title">
   <div class="section-heading"><div><p class="eyebrow">{{ ['UNDERSTAND THE CHANGE','MAKE IT WORK','START WITH A PROMPT'][loop.index0] }}</p><h2 id="{{ key }}-title">{{ section[1] }}<span>{{ section[2] }}</span></h2></div><a class="text-link" href="{{ prefix }}/{{ section[0] }}" aria-label="{{ section[1] }} 전체 보기">전체 보기 <span aria-hidden="true">→</span></a></div>
-  <div class="card-grid">{% for article in (articles|selectattr('section','equalto',key)|list)[:3] %}{{ card(article, sections, pilot) }}{% else %}{{ empty(prefix, section) }}{% endfor %}</div>
+  <div class="card-grid">{% for article in (articles|selectattr('section','equalto',key)|list)[:3] %}{{ card(article, sections, pilot, public_shell) }}{% else %}{{ empty(prefix, section) }}{% endfor %}</div>
 </section>
 {% endfor %}
 </div>

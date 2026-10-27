@@ -24,7 +24,7 @@ templates.filters["date"] = lambda value: instant(value).astimezone(ZoneInfo("As
 
 
 def create_app(store: Path = DEFAULT_STORE, *, pilot_token: str | None = None,
-               public_shell: bool = False):
+               public_shell: bool = False, public_reader=None):
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     if pilot_token is not None and len(pilot_token) < 24:
         raise ValueError("Pilot preview token must have at least 24 characters")
@@ -46,9 +46,10 @@ def create_app(store: Path = DEFAULT_STORE, *, pilot_token: str | None = None,
                                          headers={"WWW-Authenticate": 'Basic realm="AIPATH Pilot", charset="UTF-8"'})
         else:
             response = await call_next(request)
-        response.headers.update({"Cache-Control": "public, max-age=300" if public_shell else "private, no-store, max-age=0",
-                                 "CDN-Cache-Control": "max-age=300" if public_shell else "no-store",
-                                 "Vercel-CDN-Cache-Control": "max-age=300" if public_shell else "no-store",
+        public_cache = public_shell and public_reader is None
+        response.headers.update({"Cache-Control": "public, max-age=300" if public_cache else "no-store",
+                                 "CDN-Cache-Control": "max-age=300" if public_cache else "no-store",
+                                 "Vercel-CDN-Cache-Control": "max-age=300" if public_cache else "no-store",
                                  "X-Robots-Tag": "index, follow" if public_shell else "noindex, nofollow, noarchive",
                                  "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
                                  "Content-Security-Policy": "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"})
@@ -74,6 +75,8 @@ def create_app(store: Path = DEFAULT_STORE, *, pilot_token: str | None = None,
 
     def snapshot(mode):
         if public_shell:
+            if mode == "public" and public_reader is not None:
+                return public_reader(), None
             return [], None
         if mode == "public":
             return [], None
@@ -148,7 +151,8 @@ def create_app(store: Path = DEFAULT_STORE, *, pilot_token: str | None = None,
             return render("listing.html", mode=mode, title=SECTIONS[section][1], description=SECTIONS[section][2],
                           current_section=section, articles=articles[(number-1)*12:number*12], number=number, pages=pages)
         if section and len(parts) == 2:
-            article = next((c for c in visible if c["path"] == "/" + mode + "/" + route), None)
+            article_path = ("/" + mode if mode != "public" else "") + "/" + route
+            article = next((c for c in visible if c["path"] == article_path), None)
             if article:
                 related = [c for c in visible if c["id"] in article["related_content_ids"]]
                 return render("detail.html", mode=mode, title=article["title"], description=article["summary"],

@@ -1,0 +1,11 @@
+{% macro card(article, sections, pilot=False) %}
+<article class="content-card">
+  <div class="card-top"><span>{{ sections[article.section][1] }}</span><span class="fixture-tag">{{ '검토 중' if pilot else '모의 콘텐츠' }}</span></div>
+  <h3><a href="{{ article.path }}">{{ article.title }}</a></h3>
+  <p>{{ article.summary }}</p>
+  <div class="card-bottom"><span>확인 {{ article.verified_at|date }}</span><span aria-hidden="true">↗</span></div>
+</article>
+{% endmacro %}
+{% macro empty(prefix, section=None) %}
+<div class="empty"><p>아직 공개된 콘텐츠가 없습니다.</p>{% if section %}<a href="{{ prefix }}/{{ section[0] }}">{{ section[1] }} 페이지 살펴보기 →</a>{% else %}<a href="{{ prefix }}/">다른 섹션 살펴보기 →</a>{% endif %}</div>
+{% endmacro %}

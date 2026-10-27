@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% from "macros.html" import card, empty %}
+{% block main %}
+<section class="wrap hero" aria-labelledby="hero-title">
+  <div class="hero-copy"><div class="eyebrow"><span></span> YOUR NEXT STEP WITH AI</div>
+    <h1 id="hero-title">AI의 변화가,<br><span>나의 가능성으로.</span></h1>
+    <p>빠르게 바뀌는 AI, 어렵게 따라가지 마세요.<br>필요한 소식을 이해하고, 내 일에 적용하고,<br class="mobile-break"> 쓸모 있는 프롬프트를 가져가세요.</p>
+    <a class="primary-link" href="{{ prefix }}/ai-now">AI 소식부터 살펴보기 <span aria-hidden="true">↗</span></a>
+  </div>
+  <div class="path-art" aria-hidden="true">
+    <div class="art-label">A PATH TO POSSIBILITIES</div>
+    <div class="path-track"><div class="path-line"></div><div class="path-node node-one"><span>01</span><strong>이해하다</strong><small>AI NOW</small></div><div class="path-node node-two"><span>02</span><strong>적용하다</strong><small>AI TIPS</small></div><div class="path-node node-three"><span>03</span><strong>시작하다</strong><small>PROMPT LAB</small></div></div>
+    <div class="art-caption">작은 이해가 만드는, 새로운 다음 단계 <span>↗</span></div>
+  </div>
+</section>
+<section class="wrap entry-grid" aria-label="나에게 필요한 시작점">
+  {% for key, section in sections.items() %}
+  <a class="entry" href="{{ prefix }}/{{ section[0] }}"><span class="entry-number">0{{ loop.index }}</span><div><span class="entry-label">{{ section[1] }}</span><h2>{{ section[2] }}</h2></div><span aria-hidden="true">↗</span></a>
+  {% endfor %}
+</section>
+<div class="wrap feed">
+{% for key, section in sections.items() %}
+<section class="feed-section" aria-labelledby="{{ key }}-title">
+  <div class="section-heading"><div><p class="eyebrow">{{ ['UNDERSTAND THE CHANGE','MAKE IT WORK','START WITH A PROMPT'][loop.index0] }}</p><h2 id="{{ key }}-title">{{ section[1] }}<span>{{ section[2] }}</span></h2></div><a class="text-link" href="{{ prefix }}/{{ section[0] }}" aria-label="{{ section[1] }} 전체 보기">전체 보기 <span aria-hidden="true">→</span></a></div>
+  <div class="card-grid">{% for article in (articles|selectattr('section','equalto',key)|list)[:3] %}{{ card(article, sections, pilot) }}{% else %}{{ empty(prefix, section) }}{% endfor %}</div>
+</section>
+{% endfor %}
+</div>
+<aside class="wrap trust-note"><span class="trust-symbol" aria-hidden="true">✓</span><div><h2>정보보다 중요한 건, 믿고 활용할 수 있는 기준.</h2><p>출처와 확인일, 적용 조건과 한계를 함께 전합니다.</p></div><a href="{{ prefix }}/editorial-policy">우리의 편집 원칙 →</a></aside>
+{% endblock %}
